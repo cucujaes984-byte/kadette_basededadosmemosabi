@@ -1,24 +1,25 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const bcrypt = require('bcryptjs'); // Install via: npm install bcryptjs
 
 const app = express();
 app.use(express.json());
 
-// Configuração do CORS para permitir ligações seguras do teu Frontend
 app.use(cors({
     origin: '*', 
     methods: ['GET', 'POST', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Ligação à tua Base de Dados (Substitui pela tua string do MongoDB Atlas se necessário)
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/kadette_barber';
 mongoose.connect(MONGO_URI)
-    .then(() => console.log('Sistemas de dados ligados com sucesso.'))
-    .catch(err => console.error('Erro interno de infraestrutura de dados.'));
+    .then(() => console.log('Database connected.'))
+    .catch(err => console.error('Database connection error.'));
 
-// Schema de Marcações
+// --- SCHEMAS ---
+
+// Appointments Schema
 const marcacaoSchema = new mongoose.Schema({
     nome: { type: String, required: true },
     servico: { type: String, required: true },
@@ -27,61 +28,100 @@ const marcacaoSchema = new mongoose.Schema({
 });
 const Marcacao = mongoose.model('Marcacao', marcacaoSchema);
 
-// 1. ROTA DE LOGIN (Credenciais mascaradas e seguras)
-app.post('/api/login', (req, res) => {
+// Users Schema (New)
+const userSchema = new mongoose.Schema({
+    username: { type: String, required: true, unique: true },
+    password: { type: String, required: true }
+});
+const User = mongoose.model('User', userSchema);
+
+
+// --- ROUTES ---
+
+// 1. REGISTER ROUTE (New: Allows anyone to create an account safely)
+app.post('/api/register', async (req, res) => {
     try {
         const { username, password } = req.body;
-
-        // Credenciais estáticas para o painel do barbeiro
-        if (username === 'admin' && password === 'kadette2026') {
-            return res.json({ success: true, token: 'sessao_autenticada_premium_kadette' });
-        } else {
-            // Resposta genérica padrão para evitar engenharia reversa de utilizadores
-            return res.status(401).json({ message: 'Credenciais inválidas.' });
+        if (!username || !password) {
+            return res.status(400).json({ message: 'Missing fields.' });
         }
+
+        // Check if username already exists
+        const userExists = await User.findOne({ username: username.toLowerCase() });
+        if (userExists) {
+            return res.status(400).json({ message: 'Username already exists.' });
+        }
+
+        // Securely hash the password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        // Save to MongoDB
+        const newUser = new User({ username: username.toLowerCase(), password: hashedPassword });
+        await newUser.save();
+
+        res.status(201).json({ success: true });
     } catch (err) {
-        console.error('ERRO CRÍTICO NO LOGIN:', err); // Só tu vês no Render
-        return res.status(500).json({ message: 'De momento não foi possível processar a autenticação.' });
+        console.error('REGISTRATION ERROR:', err);
+        res.status(500).json({ message: 'Could not complete registration.' });
     }
 });
 
-// 2. ROTA PARA OBTER MARCAÇÕES (GET)
+// 2. LOGIN ROUTE (Updated: Checks credentials against MongoDB)
+app.post('/api/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+
+        // Find user in database
+        const user = await User.findOne({ username: username.toLowerCase() });
+        if (!user) {
+            return res.status(401).json({ message: 'Invalid credentials.' });
+        }
+
+        // Compare hashed password
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return res.status(401).json({ message: 'Invalid credentials.' });
+        }
+
+        res.json({ success: true, token: 'session_authenticated_user' });
+    } catch (err) {
+        console.error('LOGIN ERROR:', err);
+        res.status(500).json({ message: 'Authentication error.' });
+    }
+});
+
+// 3. GET APPOINTMENTS
 app.get('/api/marcacoes', async (req, res) => {
     try {
         const lista = await Marcacao.find();
         res.json(lista);
     } catch (err) {
-        console.error('ERRO CRÍTICO AO PROCURAR MARCAÇÕES:', err);
-        res.status(500).json({ message: 'Erro ao carregar os registos do sistema.' });
+        res.status(500).json({ message: 'Error loading data.' });
     }
 });
 
-// 3. ROTA PARA CRIAR MARCAÇÃO (POST)
+// 4. CREATE APPOINTMENT
 app.post('/api/marcacoes', async (req, res) => {
     try {
         const { nome, servico, data, hora } = req.body;
-        if (!nome || !servico || !data || !hora) {
-            return res.status(400).json({ message: 'Dados de marcação incompletos.' });
-        }
         const novaMarcacao = new Marcacao({ nome, servico, data, hora });
         await novaMarcacao.save();
         res.status(201).json({ success: true });
     } catch (err) {
-        console.error('ERRO CRÍTICO AO SALVAR MARCAÇÃO:', err);
-        res.status(500).json({ message: 'Não foi possível guardar o seu agendamento no sistema.' });
+        res.status(500).json({ message: 'Error saving appointment.' });
     }
 });
 
-// 4. ROTA PARA APAGAR MARCAÇÃO (DELETE)
+// 5. DELETE APPOINTMENT
 app.delete('/api/marcacoes/:id', async (req, res) => {
     try {
         await Marcacao.findByIdAndDelete(req.params.id);
         res.json({ success: true });
     } catch (err) {
-        console.error('ERRO CRÍTICO AO APAGAR MARCAÇÃO:', err);
-        res.status(500).json({ message: 'Não foi possível remover o registo solicitado.' });
+        res.status(500).json({ message: 'Error deleting data.' });
     }
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Servidor operacional na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
