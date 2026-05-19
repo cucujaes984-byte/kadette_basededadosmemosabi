@@ -148,6 +148,52 @@ app.post('/api/login', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro na autênticação.' }); }
 });
 
+// ALTERAR NOME DE UTILIZADOR (USERNAME)
+app.put('/api/users/update-username', async (req, res) => {
+    try {
+        const { usernameAtual, novoUsername } = req.body;
+
+        if (!usernameAtual || !novoUsername) {
+            return res.status(400).json({ message: 'Campos em falta.' });
+        }
+
+        const antigo = usernameAtual.toLowerCase().trim();
+        const novo = novoUsername.toLowerCase().trim();
+
+        if (novo === 'admin') {
+            return res.status(400).json({ message: 'Não podes usar o nome admin.' });
+        }
+
+        if (antigo === 'admin') {
+            return res.status(400).json({ message: 'O administrador master não pode mudar de nome por aqui.' });
+        }
+
+        // 1. Verifica se o novo nome já existe na base de dados
+        const userExists = await User.findOne({ username: novo });
+        if (userExists) {
+            return res.status(400).json({ message: 'Este nome de utilizador já está a ser utilizado.' });
+        }
+
+        // 2. Atualiza o nome no registo do Utilizador
+        const usuarioAtualizado = await User.findOneAndUpdate(
+            { username: antigo },
+            { username: novo },
+            { new: true }
+        );
+
+        if (!usuarioAtualizado) {
+            return res.status(404).json({ message: 'Utilizador não encontrado.' });
+        }
+
+        // 3. Atualiza também o histórico de marcações deste cliente para o novo nome
+        await Marcacao.updateMany({ username: antigo }, { username: novo });
+
+        res.json({ success: true, novoUsername: novo });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Erro ao atualizar o nome de utilizador.' });
+    }
+});
 // VER UTILIZADORES (ADMIN)
 app.get('/api/users', async (req, res) => {
     try {
