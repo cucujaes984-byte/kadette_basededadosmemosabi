@@ -8,7 +8,7 @@ app.use(cors());
 app.use(bodyParser.json());
 
 // 1. Conectar ao MongoDB (Já configurado com o teu link real da nuvem)
-const dbURI = 'mongodb+srv://sioteconta_db_user:hHivxdZTH0HAgvHZ@cluster.orny929.mongodb.net/?appName=Cluster';
+const dbURI = process.env.MONGO_URI;
 
 mongoose.connect(dbURI)
   .then(() => console.log("Base de Dados Kadette Conectada com sucesso!"))
