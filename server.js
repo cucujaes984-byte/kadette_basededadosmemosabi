@@ -24,34 +24,7 @@ const io = new Server(server, {
     }
 });
 
-// --- LIGAÇÃO À BASE DE DADOS + CRIAÇÃO DO ADMIN AUTOMÁTICO ---
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/kadette_barber';
-mongoose.connect(MONGO_URI)
-    .then(async () => {
-        console.log('Sistemas de dados sincronizados.');
-        
-        // Garante que o admin com a password "kadette2026" existe sempre
-        try {
-            const adminExiste = await User.findOne({ username: 'admin' });
-            if (!adminExiste) {
-                const salt = await bcrypt.genSalt(10);
-                const hashedPassword = await bcrypt.hash('kadette2026', salt);
-                
-                const adminUser = new User({
-                    username: 'admin',
-                    password: hashedPassword
-                });
-                
-                await adminUser.save();
-                console.log('--- CONTA MASTER ADMIN CONFIGURADA COM SUCESSO ---');
-            }
-        } catch (err) {
-            console.error('Erro ao injetar conta admin automática:', err);
-        }
-    })
-    .catch(err => console.error('Erro na ligação de dados.'));
-
-// --- SCHEMAS ---
+// --- 1. SCHEMAS E MODELOS (Declarados primeiro para evitar erros assíncronos) ---
 
 const marcacaoSchema = new mongoose.Schema({
     username: { type: String, required: true }, 
@@ -68,7 +41,35 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
-// --- LÓGICA DO CHAT GLOBAL ---
+
+// --- 2. LIGAÇÃO À BASE DE DADOS + FORCE ADMIN INJECTION ---
+
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/kadette_barber';
+mongoose.connect(MONGO_URI)
+    .then(async () => {
+        console.log('Sistemas de dados sincronizados.');
+        
+        try {
+            // Gerar a nova password encriptada com segurança
+            const salt = await bcrypt.genSalt(10);
+            const hashedPassword = await bcrypt.hash('kadette2026', salt);
+            
+            // ATUALIZA OU CRIA (Se houver lixo ou conta mal criada, isto limpa e corrige na hora)
+            await User.findOneAndUpdate(
+                { username: 'admin' },
+                { username: 'admin', password: hashedPassword },
+                { upsert: true, new: true }
+            );
+            
+            console.log('--- CONTA MASTER "admin" INJETADA/RESETADA COM "kadette2026" ---');
+        } catch (err) {
+            console.error('Erro ao injetar conta admin automática:', err);
+        }
+    })
+    .catch(err => console.error('Erro na ligação de dados.'));
+
+
+// --- 3. LÓGICA DO CHAT GLOBAL ---
 io.on('connection', (socket) => {
     socket.on('enviarMensagem', (dados) => {
         io.emit('receberMensagem', {
@@ -79,7 +80,8 @@ io.on('connection', (socket) => {
     });
 });
 
-// --- ROTAS DA API ---
+
+// --- 4. ROTAS DA API ---
 
 // REGISTO DE UTILIZADORES
 app.post('/api/register', async (req, res) => {
@@ -106,6 +108,7 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
+        // Adicionado o .trim() e .toLowerCase() no login para evitar erros de digitação acidentais
         const user = await User.findOne({ username: username.toLowerCase().trim() });
         
         if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
@@ -126,10 +129,10 @@ app.get('/api/marcacoes', async (req, res) => {
         if (!queryUser) return res.status(400).json({ message: 'Falta identificação do utilizador.' });
 
         let lista;
-        if (queryUser.toLowerCase() === 'admin') {
+        if (queryUser.toLowerCase().trim() === 'admin') {
             lista = await Marcacao.find();
         } else {
-            lista = await Marcacao.find({ username: queryUser.toLowerCase() });
+            lista = await Marcacao.find({ username: queryUser.toLowerCase().trim() });
         }
         
         res.json(lista);
@@ -171,6 +174,6 @@ app.delete('/api/marcacoes/:id', async (req, res) => {
     }
 });
 
-// Inicialização com o server do HTTP para não bloquear os WebSockets
+// Inicialização com o servidor HTTP
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
