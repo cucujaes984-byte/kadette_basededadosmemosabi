@@ -1,7 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const bcrypt = require('bcryptjs'); // Install via: npm install bcryptjs
+const bcrypt = require('bcryptjs');
 
 const app = express();
 app.use(express.json());
@@ -14,13 +14,14 @@ app.use(cors({
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/kadette_barber';
 mongoose.connect(MONGO_URI)
-    .then(() => console.log('Database connected.'))
-    .catch(err => console.error('Database connection error.'));
+    .then(() => console.log('Sistemas de dados sincronizados.'))
+    .catch(err => console.error('Erro na ligação de dados.'));
 
 // --- SCHEMAS ---
 
-// Appointments Schema
+// O Schema de marcações agora guarda OBRIGATORIAMENTE o utilizador que agendou
 const marcacaoSchema = new mongoose.Schema({
+    username: { type: String, required: true }, 
     nome: { type: String, required: true },
     servico: { type: String, required: true },
     data: { type: String, required: true },
@@ -28,100 +29,104 @@ const marcacaoSchema = new mongoose.Schema({
 });
 const Marcacao = mongoose.model('Marcacao', marcacaoSchema);
 
-// Users Schema (New)
 const userSchema = new mongoose.Schema({
     username: { type: String, required: true, unique: true },
     password: { type: String, required: true }
 });
 const User = mongoose.model('User', userSchema);
 
+// --- ROTAS ---
 
-// --- ROUTES ---
-
-// 1. REGISTER ROUTE (New: Allows anyone to create an account safely)
+// REGISTO DE UTILIZADORES
 app.post('/api/register', async (req, res) => {
     try {
         const { username, password } = req.body;
-        if (!username || !password) {
-            return res.status(400).json({ message: 'Missing fields.' });
-        }
+        if (!username || !password) return res.status(400).json({ message: 'Campos em falta.' });
 
-        // Check if username already exists
-        const userExists = await User.findOne({ username: username.toLowerCase() });
-        if (userExists) {
-            return res.status(400).json({ message: 'Username already exists.' });
-        }
+        const userExists = await User.findOne({ username: username.toLowerCase().trim() });
+        if (userExists) return res.status(400).json({ message: 'Este utilizador já existe.' });
 
-        // Securely hash the password
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        // Save to MongoDB
-        const newUser = new User({ username: username.toLowerCase(), password: hashedPassword });
+        const newUser = new User({ username: username.toLowerCase().trim(), password: hashedPassword });
         await newUser.save();
 
         res.status(201).json({ success: true });
     } catch (err) {
-        console.error('REGISTRATION ERROR:', err);
-        res.status(500).json({ message: 'Could not complete registration.' });
+        res.status(500).json({ message: 'Erro ao processar registo.' });
     }
 });
 
-// 2. LOGIN ROUTE (Updated: Checks credentials against MongoDB)
+// LOGIN (Retorna o username para o frontend saber quem entrou)
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
+        const user = await User.findOne({ username: username.toLowerCase().trim() });
+        
+        if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
 
-        // Find user in database
-        const user = await User.findOne({ username: username.toLowerCase() });
-        if (!user) {
-            return res.status(401).json({ message: 'Invalid credentials.' });
-        }
-
-        // Compare hashed password
         const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(401).json({ message: 'Invalid credentials.' });
-        }
+        if (!isMatch) return res.status(401).json({ message: 'Credenciais inválidas.' });
 
-        res.json({ success: true, token: 'session_authenticated_user' });
+        res.json({ success: true, username: user.username });
     } catch (err) {
-        console.error('LOGIN ERROR:', err);
-        res.status(500).json({ message: 'Authentication error.' });
+        res.status(500).json({ message: 'Erro na autenticação.' });
     }
 });
 
-// 3. GET APPOINTMENTS
+// OBTER MARCAÇÕES (FILTRADO POR UTILIZADOR)
 app.get('/api/marcacoes', async (req, res) => {
     try {
-        const lista = await Marcacao.find();
+        const queryUser = req.query.user;
+        if (!queryUser) return res.status(400).json({ message: 'Falta identificação do utilizador.' });
+
+        let lista;
+        // Se for o admin, encontra TUDO. Se for um cliente, encontra apenas os dele.
+        if (queryUser.toLowerCase() === 'admin') {
+            lista = await Marcacao.find();
+        } else {
+            lista = await Marcacao.find({ username: queryUser.toLowerCase() });
+        }
+        
         res.json(lista);
     } catch (err) {
-        res.status(500).json({ message: 'Error loading data.' });
+        res.status(500).json({ message: 'Erro ao ler dados da agenda.' });
     }
 });
 
-// 4. CREATE APPOINTMENT
+// CRIAR MARCAÇÃO VINCULADA AO UTILIZADOR
 app.post('/api/marcacoes', async (req, res) => {
     try {
-        const { nome, servico, data, hora } = req.body;
-        const novaMarcacao = new Marcacao({ nome, servico, data, hora });
+        const { username, nome, servico, data, hora } = req.body;
+        if (!username || !nome || !servico || !data || !hora) {
+            return res.status(400).json({ message: 'Dados incompletos.' });
+        }
+
+        const novaMarcacao = new Marcacao({ 
+            username: username.toLowerCase().trim(), 
+            nome, 
+            servico, 
+            data, 
+            hora 
+        });
+        
         await novaMarcacao.save();
         res.status(201).json({ success: true });
     } catch (err) {
-        res.status(500).json({ message: 'Error saving appointment.' });
+        res.status(500).json({ message: 'Erro ao salvar marcação.' });
     }
 });
 
-// 5. DELETE APPOINTMENT
+// APAGAR MARCAÇÃO
 app.delete('/api/marcacoes/:id', async (req, res) => {
     try {
         await Marcacao.findByIdAndDelete(req.params.id);
         res.json({ success: true });
     } catch (err) {
-        res.status(500).json({ message: 'Error deleting data.' });
+        res.status(500).json({ message: 'Erro ao remover.' });
     }
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
