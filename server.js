@@ -14,7 +14,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Servidor HTTP necessário para o funcionamento do Socket.io
+// Servidor HTTP necessário para suportar WebSockets (Socket.io)
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -24,7 +24,7 @@ const io = new Server(server, {
     }
 });
 
-// --- 1. SCHEMAS E MODELOS (Declarados primeiro para evitar erros assíncronos) ---
+// --- 1. SCHEMAS E MODELOS (Declarados primeiro para o Mongoose não falhar) ---
 
 const marcacaoSchema = new mongoose.Schema({
     username: { type: String, required: true }, 
@@ -42,34 +42,33 @@ const userSchema = new mongoose.Schema({
 const User = mongoose.model('User', userSchema);
 
 
-// --- 2. LIGAÇÃO À BASE DE DADOS + FORCE ADMIN INJECTION ---
+// --- 2. LIGAÇÃO À BASE DE DADOS + RESET AUTOMÁTICO DO ADMIN ---
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/kadette_barber';
 mongoose.connect(MONGO_URI)
     .then(async () => {
-        console.log('Sistemas de dados sincronizados.');
+        console.log('Sistemas de dados sincronizados com o MongoDB.');
         
         try {
-            // Gerar a nova password encriptada com segurança
+            // Força a criação ou reset do admin para a password correta
             const salt = await bcrypt.genSalt(10);
             const hashedPassword = await bcrypt.hash('kadette2026', salt);
             
-            // ATUALIZA OU CRIA (Se houver lixo ou conta mal criada, isto limpa e corrige na hora)
             await User.findOneAndUpdate(
                 { username: 'admin' },
                 { username: 'admin', password: hashedPassword },
                 { upsert: true, new: true }
             );
             
-            console.log('--- CONTA MASTER "admin" INJETADA/RESETADA COM "kadette2026" ---');
+            console.log('--- CONTA MASTER "admin" SINCRONIZADA COM SUCESSO (kadette2026) ---');
         } catch (err) {
             console.error('Erro ao injetar conta admin automática:', err);
         }
     })
-    .catch(err => console.error('Erro na ligação de dados.'));
+    .catch(err => console.error('Erro fatal na ligação de dados:', err));
 
 
-// --- 3. LÓGICA DO CHAT GLOBAL ---
+// --- 3. LÓGICA DO CHAT GLOBAL EM TEMPO REAL ---
 io.on('connection', (socket) => {
     socket.on('enviarMensagem', (dados) => {
         io.emit('receberMensagem', {
@@ -81,9 +80,9 @@ io.on('connection', (socket) => {
 });
 
 
-// --- 4. ROTAS DA API ---
+// --- 4. ROTAS DA API REST ---
 
-// REGISTO DE UTILIZADORES
+// REGISTO DE NOVOS CLIENTES
 app.post('/api/register', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -104,11 +103,10 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// LOGIN
+// LOGIN DE UTILIZADORES
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
-        // Adicionado o .trim() e .toLowerCase() no login para evitar erros de digitação acidentais
         const user = await User.findOne({ username: username.toLowerCase().trim() });
         
         if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
@@ -122,7 +120,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// OBTER MARCAÇÕES (FILTRADO POR UTILIZADOR / ADMIN VÊ TUDO)
+// OBTER MARCAÇÕES (O admin vê tudo, o cliente só vê as suas)
 app.get('/api/marcacoes', async (req, res) => {
     try {
         const queryUser = req.query.user;
@@ -141,7 +139,7 @@ app.get('/api/marcacoes', async (req, res) => {
     }
 });
 
-// CRIAR MARCAÇÃO VINCULADA AO UTILIZADOR
+// CRIAR NOVA MARCAÇÃO VINCULADA AO CLIENTE
 app.post('/api/marcacoes', async (req, res) => {
     try {
         const { username, nome, servico, data, hora } = req.body;
@@ -164,7 +162,7 @@ app.post('/api/marcacoes', async (req, res) => {
     }
 });
 
-// APAGAR MARCAÇÃO
+// CANCELAR / REMOVER MARCAÇÃO
 app.delete('/api/marcacoes/:id', async (req, res) => {
     try {
         await Marcacao.findByIdAndDelete(req.params.id);
@@ -174,6 +172,6 @@ app.delete('/api/marcacoes/:id', async (req, res) => {
     }
 });
 
-// Inicialização com o servidor HTTP
+// Inicialização com o objeto 'server' do HTTP para os WebSockets funcionarem online
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
+server.listen(PORT, () => console.log(`Servidor a rodar de forma estável na porta ${PORT}`));
