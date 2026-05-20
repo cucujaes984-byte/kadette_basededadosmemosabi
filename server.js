@@ -300,3 +300,107 @@ app.delete('/api/chat/:id', async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Servidor Kadette ativo na porta ${PORT}`));
+
+// ==========================================
+// FUNÇÕES UPGRADE: LÓGICA DE PERFIL DINÂMICO
+// ==========================================
+
+// 1. CHAMA ISTO LOGO NO SUCESSO DO TEU FETCH DE LOGIN ANTIGO
+function guardarDadosLogin(data) {
+    localStorage.setItem('username', data.username);
+    localStorage.setItem('profilePic', data.profilePic);
+    localStorage.setItem('bio', data.bio);
+    
+    // Altera os elementos visuais de imediato sem dar F5
+    atualizarUIPerfil();
+}
+
+// 2. ATUALIZA A INTERFACE COM OS DADOS EM CACHE
+function atualizarUIPerfil() {
+    const fotoPadrao = 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png';
+    const bioPadrao = 'Cliente fiel da Kadette Barbershop! ✂️';
+    
+    const foto = localStorage.getItem('profilePic') || fotoPadrao;
+    const bio = localStorage.getItem('bio') || bioPadrao;
+    const user = localStorage.getItem('username') || 'Utilizador';
+
+    // Injeta dinamicamente nas tags do HTML
+    if (document.getElementById('user-avatar')) document.getElementById('user-avatar').src = foto;
+    if (document.getElementById('profile-bio')) document.getElementById('profile-bio').innerText = bio;
+    if (document.getElementById('profile-username')) document.getElementById('profile-username').innerText = `@${user}`;
+}
+
+// 3. EVENTOS DE CONTROLO DO POP-UP MODAL
+function abrirModalPerfil() {
+    document.getElementById('modal-perfil').style.display = 'flex';
+    
+    const fotoAtual = localStorage.getItem('profilePic') || '';
+    const bioAtual = localStorage.getItem('bio') || '';
+    
+    document.getElementById('input-avatar-url').value = fotoAtual;
+    document.getElementById('input-bio').value = bioAtual;
+    document.getElementById('bio-chars').innerText = bioAtual.length;
+}
+
+function fecharModalPerfil() {
+    document.getElementById('modal-perfil').style.display = 'none';
+}
+
+// 4. ENVIO DOS DADOS PARA O SERVIDOR DO RENDER (PUT)
+async function guardarPerfil() {
+    const btnGuardar = document.querySelector('.btn-perfil-guardar');
+    const novoAvatarUrl = document.getElementById('input-avatar-url').value.trim();
+    const novaBio = document.getElementById('input-bio').value.trim();
+    const username = localStorage.getItem('username');
+
+    if (!username) return alert("Erro: Sessão expirada. Faz login novamente.");
+
+    // Feedback visual de carregamento (UI Dinâmica)
+    btnGuardar.innerText = "A guardar...";
+    btnGuardar.disabled = true;
+
+    try {
+        const response = await fetch('https://kadette-basededadosmemosabi.onrender.com/api/users/profile', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                username: username, 
+                profilePic: novoAvatarUrl || undefined, 
+                bio: novaBio || undefined 
+            })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            // Sincroniza o armazenamento local
+            localStorage.setItem('profilePic', data.profilePic);
+            localStorage.setItem('bio', data.bio);
+            
+            // Renderiza na hora os novos valores no ecrã
+            atualizarUIPerfil();
+            fecharModalPerfil();
+        } else {
+            alert(data.message || "Não foi possível atualizar os teus dados.");
+        }
+    } catch (err) {
+        console.error("Erro ao conectar à API:", err);
+        alert("Erro de rede. O servidor do Render pode estar a iniciar.");
+    } finally {
+        // Restaura o botão ao estado normal
+        btnGuardar.innerText = "Guardar Alterações";
+        btnGuardar.disabled = false;
+    }
+}
+
+// Ouvinte para contar os caracteres da biografia em tempo real (Efeito Dinâmico)
+document.addEventListener("DOMContentLoaded", () => {
+    atualizarUIPerfil(); // Corre logo ao entrar no site
+
+    const textareaBio = document.getElementById('input-bio');
+    if (textareaBio) {
+        textareaBio.addEventListener('input', (e) => {
+            document.getElementById('bio-chars').innerText = e.target.value.length;
+        });
+    }
+});
