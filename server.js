@@ -50,7 +50,7 @@ const marcacaoSchema = new mongoose.Schema({
 });
 const Marcacao = mongoose.model('Marcacao', marcacaoSchema);
 
-// MODELO DE UTILIZADOR ATUALIZADO COM FOTO E BIO
+// MODELO DE UTILIZADOR
 const userSchema = new mongoose.Schema({
     username: { type: String, required: true, unique: true },
     password: { type: String, required: true },
@@ -76,7 +76,7 @@ const MONGO_URI = 'mongodb+srv://sioteconta_db_user:l5BMU5cyhppKjTe4@cluster.orn
 
 mongoose.connect(MONGO_URI)
     .then(async () => {
-        console.log('Sistemas de dados sincronizados com o MongoDB.');
+        console.log('Sistemas de dados synchronized com o MongoDB.');
         try {
             const salt = await bcrypt.genSalt(10);
             const hashedPassword = await bcrypt.hash('kadette2026', salt);
@@ -100,8 +100,9 @@ mongoose.connect(MONGO_URI)
 
 // --- 3. LÓGICA EM TEMPO REAL (SOCKET.IO) ---
 io.on('connection', async (socket) => {
-    console.log('Utilizador conectado.');
+    console.log('Utilizador conectado ao Chat.');
 
+    // Envia o histórico existente ao utilizador que acabou de entrar
     try {
         const historico = await Mensagem.find().sort({ criadoEm: 1 });
         socket.emit('historicoChat', historico);
@@ -109,31 +110,40 @@ io.on('connection', async (socket) => {
         console.error('Erro ao ler histórico:', err);
     }
 
+    // Evento unificado e corrigido de receção de mensagens
     socket.on('enviarMensagem', async (dados) => {
-        const horario = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        
         try {
-            // Procura a foto atual do utilizador para enviar no chat
-            const utilizador = await User.findOne({ username: dados.user.toLowerCase().trim() });
-            const fotoDestque = utilizador ? utilizador.profilePic : 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png';
+            const horario = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+            
+            // 1. Damos prioridade à foto enviada instantaneamente pelo cliente (dados.profilePic).
+            // Se o cliente não enviar por algum motivo, faz uma busca rápida de segurança na Coleção de Utilizadores.
+            let fotoFinal = dados.profilePic;
+            
+            if (!fotoFinal || fotoFinal.trim() === '') {
+                const utilizador = await User.findOne({ username: dados.user.toLowerCase().trim() });
+                fotoFinal = utilizador ? utilizador.profilePic : 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png';
+            }
 
+            // 2. Cria e guarda o documento na Base de Dados do Chat
             const novaMsg = new Mensagem({
                 user: dados.user,
                 texto: dados.texto,
                 tempo: horario,
-                profilePic: fotoDestque
+                profilePic: fotoFinal
             });
             await novaMsg.save();
 
+            // 3. Transmite em tempo real para absolutamente TODOS os clientes na sala verem
             io.emit('receberMensagem', {
                 _id: novaMsg._id,
                 user: novaMsg.user,
                 texto: novaMsg.texto,
                 tempo: novaMsg.tempo,
-                profilePic: novaMsg.profilePic
+                profilePic: novaMsg.profilePic // Aqui vai a foto real e atualizada!
             });
+
         } catch (err) {
-            console.error('Erro ao salvar mensagem:', err);
+            console.error('Erro ao processar e distribuir mensagem:', err);
         }
     });
 });
@@ -164,7 +174,7 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// FAZER LOGIN (DEVOLVE OS DADOS DO PERFIL)
+// FAZER LOGIN
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -220,19 +230,19 @@ app.put('/api/users/update-username', async (req, res) => {
         const { usernameAtual, novoUsername } = req.body;
         if (!usernameAtual || !novoUsername) return res.status(400).json({ message: 'Campos em falta.' });
 
-        const antigo = usernameAtual.toLowerCase().trim();
+        const antiguo = usernameAtual.toLowerCase().trim();
         const novo = novoUsername.toLowerCase().trim();
 
         if (novo === 'admin') return res.status(400).json({ message: 'Não podes usar o nome admin.' });
-        if (antigo === 'admin') return res.status(400).json({ message: 'O administrador principal não pode mudar de nome.' });
+        if (antiguo === 'admin') return res.status(400).json({ message: 'O administrador principal não pode mudar de nome.' });
 
         const userExists = await User.findOne({ username: novo });
         if (userExists) return res.status(400).json({ message: 'Este nome já está em uso.' });
 
-        const usuarioAtualizado = await User.findOneAndUpdate({ username: antigo }, { username: novo }, { new: true });
+        const usuarioAtualizado = await User.findOneAndUpdate({ username: antiguo }, { username: novo }, { new: true });
         if (!usuarioAtualizado) return res.status(404).json({ message: 'Utilizador não encontrado.' });
 
-        await Marcacao.updateMany({ username: antigo }, { username: novo });
+        await Marcacao.updateMany({ username: antiguo }, { username: novo });
 
         res.json({ success: true, novoUsername: novo });
     } catch (err) { 
@@ -288,7 +298,7 @@ app.delete('/api/marcacoes/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao remover agendamento.' }); }
 });
 
-// APAGAR MENSAGEM MANUALMENTE
+// APAGAR MENSAGEM MANUALMENTE (PELO ADMIN)
 app.delete('/api/chat/:id', async (req, res) => {
     try {
         const msgId = req.params.id;
@@ -297,26 +307,7 @@ app.delete('/api/chat/:id', async (req, res) => {
         res.json({ success: true });
     } catch (err) { res.status(500).json({ message: 'Erro ao apagar mensagem.' }); }
 });
-// NO TEU SERVIDOR NODE.JS (EXPRESS/SOCKET.IO)
-socket.on('enviarMensagem', async (dados) => {
-    try {
-        // Criar o objeto da mensagem a guardar na Base de Dados
-        const novaMensagem = {
-            user: dados.user,
-            texto: dados.texto,
-            profilePic: dados.profilePic || '', // <--- GUARDA A FOTO QUE VEIO DO CLIENTE
-            tempo: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })
-        };
 
-        // Supondo que usas o MongoDB/Mongoose ou outra BD para guardar:
-        // const msgSalva = await ChatModel.create(novaMensagem);
-        
-        // REPASSA PARA TODOS OS UTILIZADORES LIGADOS (Incluindo a foto real)
-        io.emit('receberMensagem', novaMensagem); 
-
-    } catch (err) {
-        console.error("Erro ao processar mensagem do chat:", err);
-    }
-});
+// --- 5. INICIALIZAÇÃO DO SERVIDOR ---
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Servidor Kadette ativo na porta ${PORT}`));
