@@ -69,10 +69,9 @@ mensagemSchema.index({ criadoEm: 1 }, { expireAfterSeconds: 3600 });
 const Mensagem = mongoose.model('Mensagem', mensagemSchema);
 
 
-// --- 2. LIGAÇÃO À BASE DE DADOS (LINK DIRETO ATUALIZADO) ---
+// --- 2. LIGAÇÃO À BASE DE DADOS (LINK ATUALIZADO COM A NOVA PASSWORD) ---
 
-// Injetado diretamente para garantir que o Render não usa o localhost por engano
-const MONGO_URI = 'mongodb+srv://sioteconta_db_user:hHivxdZTH0AgvHZ@cluster.orny929.mongodb.net/kadette_barber?appName=Cluster';
+const MONGO_URI = 'mongodb+srv://sioteconta_db_user:l5BMU5cyhppKjTe4@cluster.orny929.mongodb.net/kadette_barber?appName=Cluster';
 
 mongoose.connect(MONGO_URI)
     .then(async () => {
