@@ -35,7 +35,7 @@ const server = http.createServer(app);
 // CONFIGURAÇÃO DO SOCKET.IO COM SUPORTE A MÚLTIPLOS DOMÍNIOS E TRANSPORTE ESTÁVEL
 const io = new Server(server, {
     cors: {
-        origin: dominiosAutorizados, // O Socket.io aceita o array diretamente aqui
+        origin: dominiosAutorizados,
         methods: ['GET', 'POST'],
         credentials: true
     },
@@ -139,30 +139,43 @@ app.post('/api/register', async (req, res) => {
     try {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ message: 'Campos em falta.' });
-        if (username.toLowerCase().trim() === 'admin') return res.status(400).json({ message: 'Nome indisponível.' });
+        
+        const usernameLimpo = username.toLowerCase().trim();
+        if (usernameLimpo === 'admin') return res.status(400).json({ message: 'Nome indisponível.' });
 
-        const userExists = await User.findOne({ username: username.toLowerCase().trim() });
+        const userExists = await User.findOne({ username: usernameLimpo });
         if (userExists) return res.status(400).json({ message: 'Este utilizador já existe.' });
 
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        const newUser = new User({ username: username.toLowerCase().trim(), password: hashedPassword });
+        const newUser = new User({ username: usernameLimpo, password: hashedPassword });
         await newUser.save();
         res.status(201).json({ success: true });
-    } catch (err) { res.status(500).json({ message: 'Erro no registo.' }); }
+    } catch (err) { 
+        console.error('ERRO REAL NO REGISTO:', err); // Vai direto para os logs do Render
+        res.status(500).json({ message: 'Erro no registo interno.' }); 
+    }
 });
 
 // FAZER LOGIN
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
-        const user = await User.findOne({ username: username.toLowerCase().trim() });
+        if (!username || !password) return res.status(400).json({ message: 'Campos em falta.' });
+
+        const usernameLimpo = username.toLowerCase().trim();
+        const user = await User.findOne({ username: usernameLimpo });
         if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
+        
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ message: 'Credenciais inválidas.' });
+        
         res.json({ success: true, username: user.username });
-    } catch (err) { res.status(500).json({ message: 'Erro na autenticação.' }); }
+    } catch (err) { 
+        console.error('ERRO REAL NO LOGIN:', err); // Vai direto para os logs do Render
+        res.status(500).json({ message: 'Erro na autenticação interna.' }); 
+    }
 });
 
 // ALTERAR NOME DE UTILIZADOR (USERNAME)
@@ -171,7 +184,7 @@ app.put('/api/users/update-username', async (req, res) => {
         const { usernameAtual, novoUsername } = req.body;
         if (!usernameAtual || !novoUsername) return res.status(400).json({ message: 'Campos em falta.' });
 
-        const antiguo = usernameAtual.toLowerCase().trim();
+        const antigo = usernameAtual.toLowerCase().trim();
         const novo = novoUsername.toLowerCase().trim();
 
         if (novo === 'admin') return res.status(400).json({ message: 'Não podes usar o nome admin.' });
@@ -180,14 +193,17 @@ app.put('/api/users/update-username', async (req, res) => {
         const userExists = await User.findOne({ username: novo });
         if (userExists) return res.status(400).json({ message: 'Este nome já está em uso.' });
 
-        const usuarioAtualizado = await User.findOneAndUpdate({ username: antiguo }, { username: novo }, { new: true });
+        const usuarioAtualizado = await User.findOneAndUpdate({ username: antigo }, { username: novo }, { new: true });
         if (!usuarioAtualizado) return res.status(404).json({ message: 'Utilizador não encontrado.' });
 
         // Atualiza o histórico de marcações antigas com o novo nome do cliente
-        await Marcacao.updateMany({ username: antiguo }, { username: novo });
+        await Marcacao.updateMany({ username: antigo }, { username: novo });
 
         res.json({ success: true, novoUsername: novo });
-    } catch (err) { res.status(500).json({ message: 'Erro ao atualizar username.' }); }
+    } catch (err) { 
+        console.error('ERRO REAL NO UPDATE USERNAME:', err); // Vai direto para os logs do Render
+        res.status(500).json({ message: 'Erro ao atualizar username.' }); 
+    }
 });
 
 // VER TODOS OS UTILIZADORES (APENAS ADMIN)
