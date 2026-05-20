@@ -8,20 +8,36 @@ const { Server } = require('socket.io');
 const app = express();
 app.use(express.json());
 
-// Configuração global de CORS para o Express API
+// --- CONFIGURAÇÃO DE SEGURANÇA (DOMÍNIOS CLOUDFLARE) ---
+const dominiosAutorizados = [
+    'https://kadette.club',
+    'https://www.kadette.club',
+    'https://fragrant-glitter-6d36.cucujaes984.workers.dev'
+];
+
+// Configuração global de CORS para o Express API (Login, Marcações, etc.)
 app.use(cors({
-    origin: '*', 
+    origin: function (origin, callback) {
+        // Permite pedidos sem origem (como apps mobile ou Postman) ou se estiver na lista autorizada
+        if (!origin || dominiosAutorizados.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error('Bloqueado pelo CORS da Kadette Barbershop'));
+        }
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
 }));
 
 const server = http.createServer(app);
 
-// CONFIGURAÇÃO DO SOCKET.IO COM CORREÇÃO DE TRANSPORTE (EVITA F5)
+// CONFIGURAÇÃO DO SOCKET.IO COM SUPORTE A MÚLTIPLOS DOMÍNIOS E TRANSPORTE ESTÁVEL
 const io = new Server(server, {
     cors: {
-        origin: '*',
-        methods: ['GET', 'POST']
+        origin: dominiosAutorizados, // O Socket.io aceita o array diretamente aqui
+        methods: ['GET', 'POST'],
+        credentials: true
     },
     transports: ['polling', 'websocket'] // Força polling primeiro para estabilizar e evitar quedas no Render
 });
@@ -155,7 +171,7 @@ app.put('/api/users/update-username', async (req, res) => {
         const { usernameAtual, novoUsername } = req.body;
         if (!usernameAtual || !novoUsername) return res.status(400).json({ message: 'Campos em falta.' });
 
-        const antigo = usernameAtual.toLowerCase().trim();
+        const antiguo = usernameAtual.toLowerCase().trim();
         const novo = novoUsername.toLowerCase().trim();
 
         if (novo === 'admin') return res.status(400).json({ message: 'Não podes usar o nome admin.' });
@@ -164,11 +180,11 @@ app.put('/api/users/update-username', async (req, res) => {
         const userExists = await User.findOne({ username: novo });
         if (userExists) return res.status(400).json({ message: 'Este nome já está em uso.' });
 
-        const usuarioAtualizado = await User.findOneAndUpdate({ username: antigo }, { username: novo }, { new: true });
+        const usuarioAtualizado = await User.findOneAndUpdate({ username: antiguo }, { username: novo }, { new: true });
         if (!usuarioAtualizado) return res.status(404).json({ message: 'Utilizador não encontrado.' });
 
         // Atualiza o histórico de marcações antigas com o novo nome do cliente
-        await Marcacao.updateMany({ username: antigo }, { username: novo });
+        await Marcacao.updateMany({ username: antiguo }, { username: novo });
 
         res.json({ success: true, novoUsername: novo });
     } catch (err) { res.status(500).json({ message: 'Erro ao atualizar username.' }); }
