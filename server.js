@@ -114,7 +114,24 @@ io.on('connection', async (socket) => {
     });
 });
 
+// FORÇA O CHAT A LIGAR POR COMPATIBILIDADE MÁXIMA E A CONECTAR SOZINHO SE CAIR
+const socket = io('https://kadette-basededadosmemosabi.onrender.com', {
+    transports: ['polling', 'websocket'], // Tenta polling primeiro (nunca falha) e sobe para websocket
+    upgrade: true,
+    rememberUpgrade: true,
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000
+});
 
+// AVISO DE DIAGNÓSTICO (Podes ver no F12 do teu PC se está mesmo ligado)
+socket.on('connect', () => {
+    console.log('Ligação em tempo real estabelecida com sucesso!');
+});
+
+socket.on('connect_error', (error) => {
+    console.error('Erro de ligação em tempo real, a tentar recuperar...', error);
+});
 // --- 4. ROTAS DA API ---
 
 // REGISTO DE NOVOS CLIENTES
