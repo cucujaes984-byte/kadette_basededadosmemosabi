@@ -107,7 +107,7 @@ io.on('connection', async (socket) => {
             utilizadoresConectados[userLimpo] = socket.id;
             console.log(`Mapeado: ${userLimpo} está online.`);
             
-            // Força a atualização imediata da lista para todos os clientes
+            // Força a atualização imediata da lista para todos os clientes ativos
             io.emit('listaOnline', Object.keys(utilizadoresConectados));
         }
     });
@@ -137,7 +137,7 @@ io.on('connection', async (socket) => {
             const horario = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
             let fotoFinal = dados.profilePic;
             
-            if (!fotoFinal || fotoFinal.trim() === '') {
+            if (!fotoFinal || fotoFinal.trim() === '' || fotoFinal === 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png') {
                 const utilizador = await User.findOne({ username: dados.user.toLowerCase().trim() });
                 fotoFinal = utilizador ? utilizador.profilePic : 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png';
             }
@@ -217,14 +217,15 @@ app.put('/api/users/profile', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao atualizar perfil.' }); }
 });
 
-// CORREÇÃO DA SEGURANÇA: Permite listar utilizadores se for o admin OU se for para a lista do chat
+// LISTAGEM DE CONTAS ATUALIZADA: Garante a extração correta de profilePic da BD
 app.get('/api/users', async (req, res) => {
     try {
         const requester = req.query.adminUser;
         const deChat = req.query.fromChat === 'true';
 
         if ((requester && requester.toLowerCase() === 'admin') || deChat) {
-            const listaClientes = await User.find({ username: { $ne: 'admin' } }).select('-password');
+            // Inclui explicitamente o campo profilePic e exclui a password por segurança
+            const listaClientes = await User.find().select('username profilePic bio');
             return res.json(listaClientes);
         }
         return res.status(403).json({ message: 'Acesso negado.' });
@@ -267,7 +268,8 @@ app.delete('/api/marcacoes/:id', async (req, res) => {
 
 app.delete('/api/chat/:id', async (req, res) => {
     try {
-        await Mensagem.findByIdAndDelete(req.params.id);
+        await Message = mongoose.model('Mensagem');
+        await Message.findByIdAndDelete(req.params.id);
         io.emit('mensagemApagada', req.params.id);
         res.json({ success: true });
     } catch (err) { res.status(500).json({ message: 'Erro ao apagar mensagem.' }); }
