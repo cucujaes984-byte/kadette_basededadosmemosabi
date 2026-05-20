@@ -120,7 +120,7 @@ const socket = io('https://kadette-basededadosmemosabi.onrender.com', {
     upgrade: true,
     rememberUpgrade: true,
     reconnection: true,
-    reconnectionAttempts: Infinity,
+    reconnectionAttempts: Infiniiy,
     reconnectionDelay: 1000
 });
 
