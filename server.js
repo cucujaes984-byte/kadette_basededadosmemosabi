@@ -95,19 +95,16 @@ mongoose.connect(MONGO_URI)
     .catch(err => console.error('Erro fatal na ligação de dados:', err));
 
 // --- LÓGICA EM TEMPO REAL (SOCKET.IO) ---
-const utilizadoresConectados = {}; // Mapeamento de username -> socket.id
+const utilizadoresConectados = {}; 
 
 io.on('connection', async (socket) => {
     console.log('Utilizador conectado ao Chat.');
 
-    // Evento disparado quando o utilizador se identifica
     socket.on('registarSocketUser', (username) => {
         if (username) {
             const userLimpo = username.toLowerCase().trim();
             utilizadoresConectados[userLimpo] = socket.id;
             console.log(`Mapeado: ${userLimpo} está online.`);
-            
-            // Força a atualização imediata da lista para todos os clientes ativos
             io.emit('listaOnline', Object.keys(utilizadoresConectados));
         }
     });
@@ -117,8 +114,6 @@ io.on('connection', async (socket) => {
             if (utilizadoresConectados[username] === socket.id) {
                 console.log(`Utilizador ${username} ficou offline.`);
                 delete utilizadoresConectados[username];
-                
-                // Força a atualização imediata da remoção para todos os clientes
                 io.emit('listaOnline', Object.keys(utilizadoresConectados));
                 break;
             }
@@ -137,7 +132,7 @@ io.on('connection', async (socket) => {
             const horario = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
             let fotoFinal = dados.profilePic;
             
-            if (!fotoFinal || fotoFinal.trim() === '' || fotoFinal === 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png') {
+            if (!fotoFinal || fotoFinal.trim() === '' || fotoFinal.includes('3135715.png')) {
                 const utilizador = await User.findOne({ username: dados.user.toLowerCase().trim() });
                 fotoFinal = utilizador ? utilizador.profilePic : 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png';
             }
@@ -158,7 +153,6 @@ io.on('connection', async (socket) => {
                 profilePic: novaMsg.profilePic
             });
 
-            // Lógica de Pings
             const textoMensagem = dados.texto.toLowerCase();
             const regexPing = /@([a-zA-Z0-9_À-ÿ\-]+)/g;
             let capturas;
@@ -217,14 +211,12 @@ app.put('/api/users/profile', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao atualizar perfil.' }); }
 });
 
-// LISTAGEM DE CONTAS ATUALIZADA: Garante a extração correta de profilePic da BD
 app.get('/api/users', async (req, res) => {
     try {
         const requester = req.query.adminUser;
         const deChat = req.query.fromChat === 'true';
 
         if ((requester && requester.toLowerCase() === 'admin') || deChat) {
-            // Inclui explicitamente o campo profilePic e exclui a password por segurança
             const listaClientes = await User.find().select('username profilePic bio');
             return res.json(listaClientes);
         }
@@ -266,10 +258,10 @@ app.delete('/api/marcacoes/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao remover agendamento.' }); }
 });
 
+// AQUI ESTÁ A CORREÇÃO SINTÁTICA EXATA DA LINHA QUE ESTAVA A DAR ERRO
 app.delete('/api/chat/:id', async (req, res) => {
     try {
-        await Message = mongoose.model('Mensagem');
-        await Message.findByIdAndDelete(req.params.id);
+        await Mensagem.findByIdAndDelete(req.params.id);
         io.emit('mensagemApagada', req.params.id);
         res.json({ success: true });
     } catch (err) { res.status(500).json({ message: 'Erro ao apagar mensagem.' }); }
