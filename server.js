@@ -15,7 +15,6 @@ const dominiosAutorizados = [
     'https://fragrant-glitter-6d36.cucujaes984.workers.dev'
 ];
 
-// Configuração global de CORS para o Express API (Login, Marcações, etc.)
 app.use(cors({
     origin: function (origin, callback) {
         if (!origin || dominiosAutorizados.indexOf(origin) !== -1) {
@@ -31,7 +30,6 @@ app.use(cors({
 
 const server = http.createServer(app);
 
-// CONFIGURAÇÃO DO SOCKET.IO COM SUPORTE A MÚLTIPLOS DOMÍNIOS E TRANSPORTE ESTÁVEL
 const io = new Server(server, {
     cors: {
         origin: dominiosAutorizados,
@@ -52,9 +50,12 @@ const marcacaoSchema = new mongoose.Schema({
 });
 const Marcacao = mongoose.model('Marcacao', marcacaoSchema);
 
+// MODELO DE UTILIZADOR ATUALIZADO COM FOTO E BIO
 const userSchema = new mongoose.Schema({
     username: { type: String, required: true, unique: true },
-    password: { type: String, required: true }
+    password: { type: String, required: true },
+    profilePic: { type: String, default: 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png' }, // Avatar padrão
+    bio: { type: String, default: 'Cliente fiel da Kadette Barbershop! ✂️' }
 });
 const User = mongoose.model('User', userSchema);
 
@@ -62,6 +63,7 @@ const mensagemSchema = new mongoose.Schema({
     user: { type: String, required: true },
     texto: { type: String, required: true },
     tempo: { type: String, required: true },
+    profilePic: { type: String, default: 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png' }, // Foto no chat
     criadoEm: { type: Date, default: Date.now }
 });
 mensagemSchema.index({ criadoEm: 1 }, { expireAfterSeconds: 3600 });
@@ -69,8 +71,7 @@ mensagemSchema.index({ criadoEm: 1 }, { expireAfterSeconds: 3600 });
 const Mensagem = mongoose.model('Mensagem', mensagemSchema);
 
 
-// --- 2. LIGAÇÃO À BASE DE DADOS (LINK ATUALIZADO COM A NOVA PASSWORD) ---
-
+// --- 2. LIGAÇÃO À BASE DE DADOS ---
 const MONGO_URI = 'mongodb+srv://sioteconta_db_user:l5BMU5cyhppKjTe4@cluster.orny929.mongodb.net/kadette_barber?appName=Cluster';
 
 mongoose.connect(MONGO_URI)
@@ -81,10 +82,15 @@ mongoose.connect(MONGO_URI)
             const hashedPassword = await bcrypt.hash('kadette2026', salt);
             await User.findOneAndUpdate(
                 { username: 'admin' },
-                { username: 'admin', password: hashedPassword },
+                { 
+                    username: 'admin', 
+                    password: hashedPassword,
+                    profilePic: 'https://cdn-icons-png.flaticon.com/512/2202/2202112.png',
+                    bio: 'Barbeiro Chefe & Administrador do Sistema 💈'
+                },
                 { upsert: true, new: true }
             );
-            console.log('--- CONTA MASTER "admin" SINCRONIZADA (kadette2026) ---');
+            console.log('--- CONTA MASTER "admin" SINCRONIZADA ---');
         } catch (err) {
             console.error('Erro ao injetar conta admin:', err);
         }
@@ -93,25 +99,29 @@ mongoose.connect(MONGO_URI)
 
 
 // --- 3. LÓGICA EM TEMPO REAL (SOCKET.IO) ---
-
 io.on('connection', async (socket) => {
-    console.log('Utilizador conectado ao chat em tempo real via canal estável.');
+    console.log('Utilizador conectado.');
 
     try {
         const historico = await Mensagem.find().sort({ criadoEm: 1 });
         socket.emit('historicoChat', historico);
     } catch (err) {
-        console.error('Erro ao ler histórico de mensagens:', err);
+        console.error('Erro ao ler histórico:', err);
     }
 
     socket.on('enviarMensagem', async (dados) => {
         const horario = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         
         try {
+            // Procura a foto atual do utilizador para enviar no chat
+            const utilizador = await User.findOne({ username: dados.user.toLowerCase().trim() });
+            const fotoDestque = utilizador ? utilizador.profilePic : 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png';
+
             const novaMsg = new Mensagem({
                 user: dados.user,
                 texto: dados.texto,
-                tempo: horario
+                tempo: horario,
+                profilePic: fotoDestque
             });
             await novaMsg.save();
 
@@ -119,10 +129,11 @@ io.on('connection', async (socket) => {
                 _id: novaMsg._id,
                 user: novaMsg.user,
                 texto: novaMsg.texto,
-                tempo: novaMsg.tempo
+                tempo: novaMsg.tempo,
+                profilePic: novaMsg.profilePic
             });
         } catch (err) {
-            console.error('Erro ao salvar mensagem no chat:', err);
+            console.error('Erro ao salvar mensagem:', err);
         }
     });
 });
@@ -149,12 +160,11 @@ app.post('/api/register', async (req, res) => {
         await newUser.save();
         res.status(201).json({ success: true });
     } catch (err) { 
-        console.error('ERRO REAL NO REGISTO:', err);
         res.status(500).json({ message: 'Erro no registo interno.' }); 
     }
 });
 
-// FAZER LOGIN
+// FAZER LOGIN (DEVOLVE OS DADOS DO PERFIL)
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -167,14 +177,44 @@ app.post('/api/login', async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ message: 'Credenciais inválidas.' });
         
-        res.json({ success: true, username: user.username });
+        res.json({ 
+            success: true, 
+            username: user.username,
+            profilePic: user.profilePic,
+            bio: user.bio
+        });
     } catch (err) { 
-        console.error('ERRO REAL NO LOGIN:', err);
         res.status(500).json({ message: 'Erro na autenticação interna.' }); 
     }
 });
 
-// ALTERAR NOME DE UTILIZADOR (USERNAME)
+// ATUALIZAR PERFIL (FOTO E BIO)
+app.put('/api/users/profile', async (req, res) => {
+    try {
+        const { username, profilePic, bio } = req.body;
+        if (!username) return res.status(400).json({ message: 'Utilizador não identificado.' });
+
+        const userLimpo = username.toLowerCase().trim();
+        
+        const userAtualizado = await User.findOneAndUpdate(
+            { username: userLimpo },
+            { profilePic, bio },
+            { new: true }
+        );
+
+        if (!userAtualizado) return res.status(404).json({ message: 'Utilizador não encontrado.' });
+
+        res.json({ 
+            success: true, 
+            profilePic: userAtualizado.profilePic, 
+            bio: userAtualizado.bio 
+        });
+    } catch (err) {
+        res.status(500).json({ message: 'Erro ao atualizar dados de perfil.' });
+    }
+});
+
+// ALTERAR NOME DE UTILIZADOR
 app.put('/api/users/update-username', async (req, res) => {
     try {
         const { usernameAtual, novoUsername } = req.body;
@@ -196,7 +236,6 @@ app.put('/api/users/update-username', async (req, res) => {
 
         res.json({ success: true, novoUsername: novo });
     } catch (err) { 
-        console.error('ERRO REAL NO UPDATE USERNAME:', err);
         res.status(500).json({ message: 'Erro ao atualizar username.' }); 
     }
 });
@@ -211,7 +250,7 @@ app.get('/api/users', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao listar contas.' }); }
 });
 
-// APAGAR CONTA (APENAS ADMIN)
+// APAGAR CONTA
 app.delete('/api/users/:username', async (req, res) => {
     try {
         const targetUser = req.params.username.toLowerCase().trim();
@@ -241,7 +280,7 @@ app.post('/api/marcacoes', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao salvar marcação.' }); }
 });
 
-// REMOVER MARCAÇÃO / CANCELAR
+// REMOVER MARCAÇÃO
 app.delete('/api/marcacoes/:id', async (req, res) => {
     try {
         await Marcacao.findByIdAndDelete(req.params.id);
@@ -249,7 +288,7 @@ app.delete('/api/marcacoes/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao remover agendamento.' }); }
 });
 
-// APAGAR MENSAGEM MANUALMENTE (MODERAÇÃO DO ADMIN)
+// APAGAR MENSAGEM MANUALMENTE
 app.delete('/api/chat/:id', async (req, res) => {
     try {
         const msgId = req.params.id;
@@ -259,6 +298,5 @@ app.delete('/api/chat/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao apagar mensagem.' }); }
 });
 
-// INICIALIZAÇÃO DO SERVIDOR
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Servidor Kadette ativo na porta ${PORT}`));
