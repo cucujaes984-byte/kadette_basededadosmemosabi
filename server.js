@@ -297,6 +297,26 @@ app.delete('/api/chat/:id', async (req, res) => {
         res.json({ success: true });
     } catch (err) { res.status(500).json({ message: 'Erro ao apagar mensagem.' }); }
 });
+// NO TEU SERVIDOR NODE.JS (EXPRESS/SOCKET.IO)
+socket.on('enviarMensagem', async (dados) => {
+    try {
+        // Criar o objeto da mensagem a guardar na Base de Dados
+        const novaMensagem = {
+            user: dados.user,
+            texto: dados.texto,
+            profilePic: dados.profilePic || '', // <--- GUARDA A FOTO QUE VEIO DO CLIENTE
+            tempo: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })
+        };
 
+        // Supondo que usas o MongoDB/Mongoose ou outra BD para guardar:
+        // const msgSalva = await ChatModel.create(novaMensagem);
+        
+        // REPASSA PARA TODOS OS UTILIZADORES LIGADOS (Incluindo a foto real)
+        io.emit('receberMensagem', novaMensagem); 
+
+    } catch (err) {
+        console.error("Erro ao processar mensagem do chat:", err);
+    }
+});
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Servidor Kadette ativo na porta ${PORT}`));
