@@ -18,7 +18,6 @@ const dominiosAutorizados = [
 // Configuração global de CORS para o Express API (Login, Marcações, etc.)
 app.use(cors({
     origin: function (origin, callback) {
-        // Permite pedidos sem origem (como apps mobile ou Postman) ou se estiver na lista autorizada
         if (!origin || dominiosAutorizados.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -39,7 +38,7 @@ const io = new Server(server, {
         methods: ['GET', 'POST'],
         credentials: true
     },
-    transports: ['polling', 'websocket'] // Força polling primeiro para estabilizar e evitar quedas no Render
+    transports: ['polling', 'websocket']
 });
 
 // --- 1. SCHEMAS E MODELOS (MONGODB) ---
@@ -59,7 +58,6 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
-// Schema do Chat com Auto-Delete (TTL Index) após 1 hora (3600 segundos)
 const mensagemSchema = new mongoose.Schema({
     user: { type: String, required: true },
     texto: { type: String, required: true },
@@ -71,9 +69,11 @@ mensagemSchema.index({ criadoEm: 1 }, { expireAfterSeconds: 3600 });
 const Mensagem = mongoose.model('Mensagem', mensagemSchema);
 
 
-// --- 2. LIGAÇÃO À BASE DE DADOS + CONFIGURAÇÃO DO ADMIN MASTER ---
+// --- 2. LIGAÇÃO À BASE DE DADOS (LINK DIRETO ATUALIZADO) ---
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/kadette_barber';
+// Injetado diretamente para garantir que o Render não usa o localhost por engano
+const MONGO_URI = 'mongodb+srv://sioteconta_db_user:hHivxdZTH0AgvHZ@cluster.orny929.mongodb.net/kadette_barber?appName=Cluster';
+
 mongoose.connect(MONGO_URI)
     .then(async () => {
         console.log('Sistemas de dados sincronizados com o MongoDB.');
@@ -98,7 +98,6 @@ mongoose.connect(MONGO_URI)
 io.on('connection', async (socket) => {
     console.log('Utilizador conectado ao chat em tempo real via canal estável.');
 
-    // Envia o histórico existente ao utilizador mal ele entra
     try {
         const historico = await Mensagem.find().sort({ criadoEm: 1 });
         socket.emit('historicoChat', historico);
@@ -106,7 +105,6 @@ io.on('connection', async (socket) => {
         console.error('Erro ao ler histórico de mensagens:', err);
     }
 
-    // Recebe novas mensagens e distribui instantaneamente
     socket.on('enviarMensagem', async (dados) => {
         const horario = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         
@@ -118,7 +116,6 @@ io.on('connection', async (socket) => {
             });
             await novaMsg.save();
 
-            // io.emit envia para TODA A GENTE ao mesmo tempo no exato segundo
             io.emit('receberMensagem', {
                 _id: novaMsg._id,
                 user: novaMsg.user,
@@ -153,7 +150,7 @@ app.post('/api/register', async (req, res) => {
         await newUser.save();
         res.status(201).json({ success: true });
     } catch (err) { 
-        console.error('ERRO REAL NO REGISTO:', err); // Vai direto para os logs do Render
+        console.error('ERRO REAL NO REGISTO:', err);
         res.status(500).json({ message: 'Erro no registo interno.' }); 
     }
 });
@@ -173,7 +170,7 @@ app.post('/api/login', async (req, res) => {
         
         res.json({ success: true, username: user.username });
     } catch (err) { 
-        console.error('ERRO REAL NO LOGIN:', err); // Vai direto para os logs do Render
+        console.error('ERRO REAL NO LOGIN:', err);
         res.status(500).json({ message: 'Erro na autenticação interna.' }); 
     }
 });
@@ -196,12 +193,11 @@ app.put('/api/users/update-username', async (req, res) => {
         const usuarioAtualizado = await User.findOneAndUpdate({ username: antigo }, { username: novo }, { new: true });
         if (!usuarioAtualizado) return res.status(404).json({ message: 'Utilizador não encontrado.' });
 
-        // Atualiza o histórico de marcações antigas com o novo nome do cliente
         await Marcacao.updateMany({ username: antigo }, { username: novo });
 
         res.json({ success: true, novoUsername: novo });
     } catch (err) { 
-        console.error('ERRO REAL NO UPDATE USERNAME:', err); // Vai direto para os logs do Render
+        console.error('ERRO REAL NO UPDATE USERNAME:', err);
         res.status(500).json({ message: 'Erro ao atualizar username.' }); 
     }
 });
@@ -259,7 +255,7 @@ app.delete('/api/chat/:id', async (req, res) => {
     try {
         const msgId = req.params.id;
         await Mensagem.findByIdAndDelete(msgId);
-        io.emit('mensagemApagada', msgId); // Remove do ecrã de todos instantaneamente
+        io.emit('mensagemApagada', msgId);
         res.json({ success: true });
     } catch (err) { res.status(500).json({ message: 'Erro ao apagar mensagem.' }); }
 });
