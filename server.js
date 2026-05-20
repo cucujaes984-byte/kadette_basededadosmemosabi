@@ -6,7 +6,10 @@ const http = require('http');
 const { Server } = require('socket.io'); 
 
 const app = express();
-app.use(express.json());
+
+// --- CORREÇÃO DO LIMITE DE TAMANHO PARA FOTOS BASE64 ---
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // --- CONFIGURAÇÃO DE SEGURANÇA (DOMÍNIOS CLOUDFLARE) ---
 const dominiosAutorizados = [
@@ -293,7 +296,8 @@ app.post('/api/marcacoes', async (req, res) => {
 // REMOVER MARCAÇÃO
 app.delete('/api/marcacoes/:id', async (req, res) => {
     try {
-        await Marcacao.findByIdAndDelete(req.params.id);
+        const { id } = req.params;
+        await Marcacao.findByIdAndDelete(id);
         res.json({ success: true });
     } catch (err) { res.status(500).json({ message: 'Erro ao remover agendamento.' }); }
 });
