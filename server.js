@@ -121,7 +121,7 @@ io.on('connection', async (socket) => {
                 const checkBan = await User.findOne({ username: userLimpo });
                 if (checkBan && checkBan.banned) {
                     socket.emit('forcadoASair', 'A tua conta foi banida permanentemente.');
-                    socket.disconnect();
+                    socket.disconnect(true);
                     return;
                 }
             } catch (err) {
@@ -158,8 +158,8 @@ io.on('connection', async (socket) => {
             
             const utilizador = await User.findOne({ username: userLimpo });
             if (utilizador && utilizador.banned) {
-                socket.emit('forcadoASair', 'Não podes enviar mensagens porque foste banido.');
-                socket.disconnect();
+                socket.emit('forcadoASair', 'Não podes enviar mensagens porque foste banido da plataforma.');
+                socket.disconnect(true);
                 return;
             }
 
@@ -326,9 +326,12 @@ app.put('/api/users/role', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao processar alteração de cargo.' }); }
 });
 
+// ALTERAÇÃO CRÍTICA: Rota de Ban completamente corrigida com desconexão abrupta forçada (disconnect(true))
 app.put('/api/users/ban', async (req, res) => {
     try {
         const { username } = req.body;
+        if (!username) return res.status(400).json({ message: 'Nome de utilizador em falta.' });
+        
         const targetUser = username.toLowerCase().trim();
 
         if (targetUser === 'admin') return res.status(400).json({ message: 'Operação proibida. O administrador principal é imune.' });
@@ -336,18 +339,30 @@ app.put('/api/users/ban', async (req, res) => {
         const utilizador = await User.findOneAndUpdate({ username: targetUser }, { banned: true }, { new: true });
         if (!utilizador) return res.status(404).json({ message: 'Utilizador não encontrado no sistema.' });
 
+        // Notifica o front-end via broadcast global se necessário
         io.emit('utilizadorBanidoKick', targetUser);
 
+        // Expulsão cirúrgica via WebSockets
         const socketIdInfrator = utilizadoresConectados[targetUser];
         if (socketIdInfrator) {
             const socketAlvo = io.sockets.sockets.get(socketIdInfrator);
-            if (socketAlvo) socketAlvo.disconnect();
+            if (socketAlvo) {
+                // Notifica o próprio canal do utilizador para que ele saiba o motivo antes de cair
+                socketAlvo.emit('forcadoASair', 'A tua conta foi banida permanentemente.');
+                
+                // Força o encerramento abrupto do canal TCP no servidor sem aceitar tentativas de reconexão
+                socketAlvo.disconnect(true);
+                console.log(`[BAN SYSTEM] O utilizador ${targetUser} foi desconectado e o seu socket destruído.`);
+            }
             delete utilizadoresConectados[targetUser];
             io.emit('listaOnline', Object.keys(utilizadoresConectados));
         }
 
-        res.json({ success: true, message: `O utilizador ${utilizador.username} foi banido e expulso do ecossistema.` });
-    } catch (err) { res.status(500).json({ message: 'Erro ao processar banimento.' }); }
+        return res.json({ success: true, message: `O utilizador ${utilizador.username} foi banido e expulso do ecossistema.` });
+    } catch (err) { 
+        console.error('Erro na execução da rota de ban:', err);
+        return res.status(500).json({ message: 'Erro ao processar banimento.' }); 
+    }
 });
 
 app.delete('/api/chat/:id', async (req, res) => {
@@ -362,18 +377,12 @@ app.delete('/api/chat/:id', async (req, res) => {
     }
 });
 
-// ALTERAÇÃO CRÍTICA: Rota Wipe completamente corrigida e sincronizada com ordem de execução estrita
 app.delete('/api/chat/wipe', async (req, res) => {
     try {
-        // 1. Limpa todas as mensagens da coleção do MongoDB de forma assíncrona
         const resultado = await Mensagem.deleteMany({}); 
-        
         console.log(`[WIPE TOTAL] Base de dados limpa. ${resultado.deletedCount} mensagens apagadas.`);
         
-        // 2. Dispara obrigatoriamente o sinal Socket para limpar o ecrã dos utilizadores conectados AGORA
         io.emit('chatLimpo'); 
-        
-        // 3. Responde com sucesso à rota HTTP
         return res.status(200).json({ 
             success: true, 
             message: 'Histórico global do chat limpo com sucesso!',
