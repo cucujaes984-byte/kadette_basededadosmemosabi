@@ -34,13 +34,21 @@ const server = http.createServer(app);
 
 // maxHttpBufferSize configurado para 50MB para suportar uploads de imagens e gravações de áudio inline
 const io = new Server(server, {
+    maxHttpBufferSize: 50 * 1024 * 1024, // Os teus 50MB atuais
     cors: {
-        origin: dominiosAutorizados,
-        methods: ['GET', 'POST'],
+        origin: function (origin, callback) {
+            if (!origin || dominiosAutorizados.indexOf(origin) !== -1) {
+                callback(null, true);
+            } else {
+                callback(new Error('Bloqueado pelo CORS da Kadette Barbershop'));
+            }
+        },
+        methods: ['GET', 'POST', 'PUT', 'DELETE'],
         credentials: true
     },
-    transports: ['polling', 'websocket'],
-    maxHttpBufferSize: 5e7 // 50MB de limite de buffer para tráfego do chat
+    // 👇 ADICIONA ESTAS DUAS LINHAS AQUI EM BAIXO 👇
+    pingTimeout: 60000,  // Espera até 60 segundos antes de derrubar a conexão por falta de resposta
+    pingInterval: 25000  // Envia um sinal de vida a cada 25 segundos
 });
 
 // --- SCHEMAS ---
