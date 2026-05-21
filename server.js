@@ -185,15 +185,18 @@ io.on('connection', async (socket) => {
                 role: novaMsg.role
             });
 
-            const textoMensagem = dados.texto.toLowerCase();
-            const regexPing = /@([a-zA-Z0-9_À-ÿ\-]+)/g;
-            let capturas;
-            while ((capturas = regexPing.exec(textoMensagem)) !== null) {
-                const userPingado = capturas[1].trim();
-                if (userPingado === dados.user.toLowerCase().trim()) continue;
-                const socketTargetId = utilizadoresConectados[userPingado];
-                if (socketTargetId) {
-                    io.to(socketTargetId).emit('notificacaoPing', { porUser: dados.user });
+            // CORREÇÃO DE SEGURANÇA: Só executa pings se a mensagem for texto simples, prevenindo quebras com Base64
+            if (dados.texto && !dados.texto.startsWith('__KADETTE_IMG__') && !dados.texto.startsWith('__KADETTE_GIF__')) {
+                const textoMensagem = dados.texto.toLowerCase();
+                const regexPing = /@([a-zA-Z0-9_À-ÿ\-]+)/g;
+                let capturas;
+                while ((capturas = regexPing.exec(textoMensagem)) !== null) {
+                    const userPingado = capturas[1].trim();
+                    if (userPingado === dados.user.toLowerCase().trim()) continue;
+                    const socketTargetId = utilizadoresConectados[userPingado];
+                    if (socketTargetId) {
+                        io.to(socketTargetId).emit('notificacaoPing', { porUser: dados.user });
+                    }
                 }
             }
         } catch (err) {
@@ -238,6 +241,42 @@ app.post('/api/login', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro na autenticação.' }); }
 });
 
+// INCLUSÃO CRÍTICA: Rota PUT para salvar na BD as alterações de Foto de Perfil e Biografia
+app.put('/api/users/profile', async (req, res) => {
+    try {
+        const { username, profilePic, bio } = req.body;
+        if (!username) return res.status(400).json({ success: false, message: 'Identificação do utilizador em falta.' });
+
+        const usernameLimpo = username.toLowerCase().trim();
+        const dadosAtualizar = {};
+        
+        if (profilePic !== undefined) dadosAtualizar.profilePic = profilePic;
+        if (bio !== undefined) dadosAtualizar.bio = bio;
+
+        const utilizadorAtualizado = await User.findOneAndUpdate(
+            { username: usernameLimpo },
+            { $set: dadosAtualizar },
+            { new: true }
+        );
+
+        if (!utilizadorAtualizado) return res.status(404).json({ success: false, message: 'Utilizador não encontrado.' });
+
+        res.json({
+            success: true,
+            message: 'Perfil guardado com sucesso!',
+            user: {
+                username: utilizadorAtualizado.username,
+                profilePic: utilizadorAtualizado.profilePic,
+                bio: utilizadorAtualizado.bio,
+                role: utilizadorAtualizado.role
+            }
+        });
+    } catch (err) {
+        console.error('Erro ao atualizar perfil:', err);
+        res.status(500).json({ success: false, message: 'Erro ao guardar alterações de perfil.' });
+    }
+});
+
 app.put('/api/users/role', async (req, res) => {
     try {
         const { username, novoRole } = req.body;
@@ -277,7 +316,6 @@ app.put('/api/users/ban', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao processar banimento.' }); }
 });
 
-// --- CORREÇÃO 2: ADICIONADA ROTA PARA APAGAR MENSAGENS INDIVIDUAIS ---
 app.delete('/api/chat/:id', async (req, res) => {
     try {
         const msgApagada = await Mensagem.findByIdAndDelete(req.params.id);
