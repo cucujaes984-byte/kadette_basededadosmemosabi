@@ -238,6 +238,17 @@ io.on('connection', async (socket) => {
             console.error("Erro ao gerir reação no socket:", err);
         }
     });
+
+    // SISTEMA DE WIPE VIA EVENTO SOCKET (Garante funcionamento instantâneo)
+    socket.on('solicitarWipeChat', async () => {
+        try {
+            const resultado = await Mensagem.deleteMany({});
+            console.log(`[WIPE VIA SOCKET] Base de dados limpa. ${resultado.deletedCount} mensagens apagadas.`);
+            io.emit('chatLimpo');
+        } catch (err) {
+            console.error('Erro fatal ao processar wipe via socket:', err);
+        }
+    });
 });
 
 // --- ROTAS DA API ---
@@ -326,7 +337,7 @@ app.put('/api/users/role', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao processar alteração de cargo.' }); }
 });
 
-// ALTERAÇÃO CRÍTICA: Rota de Ban completamente corrigida com desconexão abrupta forçada (disconnect(true))
+// ALTERAÇÃO CRÍTICA: Conta apagada completamente do MongoDB (findOneAndDelete) e desconexão abrupta forçada
 app.put('/api/users/ban', async (req, res) => {
     try {
         const { username } = req.body;
@@ -336,29 +347,27 @@ app.put('/api/users/ban', async (req, res) => {
 
         if (targetUser === 'admin') return res.status(400).json({ message: 'Operação proibida. O administrador principal é imune.' });
 
-        const utilizador = await User.findOneAndUpdate({ username: targetUser }, { banned: true }, { new: true });
-        if (!utilizador) return res.status(404).json({ message: 'Utilizador não encontrado no sistema.' });
+        // Conta é destruída diretamente na base de dados
+        const utilizadorApagado = await User.findOneAndDelete({ username: targetUser });
+        if (!utilizadorApagado) return res.status(404).json({ message: 'Utilizador não encontrado no sistema.' });
 
-        // Notifica o front-end via broadcast global se necessário
+        // Notifica o front-end via broadcast global
         io.emit('utilizadorBanidoKick', targetUser);
 
-        // Expulsão cirúrgica via WebSockets
+        // Expulsão cirúrgica e imediata via WebSockets
         const socketIdInfrator = utilizadoresConectados[targetUser];
         if (socketIdInfrator) {
             const socketAlvo = io.sockets.sockets.get(socketIdInfrator);
             if (socketAlvo) {
-                // Notifica o próprio canal do utilizador para que ele saiba o motivo antes de cair
-                socketAlvo.emit('forcadoASair', 'A tua conta foi banida permanentemente.');
-                
-                // Força o encerramento abrupto do canal TCP no servidor sem aceitar tentativas de reconexão
+                socketAlvo.emit('forcadoASair', 'A tua conta foi eliminada e foste banido da plataforma.');
                 socketAlvo.disconnect(true);
-                console.log(`[BAN SYSTEM] O utilizador ${targetUser} foi desconectado e o seu socket destruído.`);
+                console.log(`[BAN SYSTEM] O utilizador ${targetUser} foi eliminado e o seu socket destruído.`);
             }
             delete utilizadoresConectados[targetUser];
             io.emit('listaOnline', Object.keys(utilizadoresConectados));
         }
 
-        return res.json({ success: true, message: `O utilizador ${utilizador.username} foi banido e expulso do ecossistema.` });
+        return res.json({ success: true, message: `O utilizador ${utilizadorApagado.username} foi totalmente removido da base de dados.` });
     } catch (err) { 
         console.error('Erro na execução da rota de ban:', err);
         return res.status(500).json({ message: 'Erro ao processar banimento.' }); 
@@ -377,10 +386,11 @@ app.delete('/api/chat/:id', async (req, res) => {
     }
 });
 
+// ALTERAÇÃO CRÍTICA: Rota HTTP de Wipe sincronizada com emissão em tempo real global
 app.delete('/api/chat/wipe', async (req, res) => {
     try {
         const resultado = await Mensagem.deleteMany({}); 
-        console.log(`[WIPE TOTAL] Base de dados limpa. ${resultado.deletedCount} mensagens apagadas.`);
+        console.log(`[WIPE TOTAL HTTP] Base de dados limpa. ${resultado.deletedCount} mensagens apagadas.`);
         
         io.emit('chatLimpo'); 
         return res.status(200).json({ 
