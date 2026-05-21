@@ -7,8 +7,9 @@ const { Server } = require('socket.io');
 
 const app = express();
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
+// Aumentado para 50mb para garantir que nenhuma imagem em base64 seja bloqueada no Express
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 const dominiosAutorizados = [
     'https://kadette.club',
@@ -31,13 +32,15 @@ app.use(cors({
 
 const server = http.createServer(app);
 
+// CORREÇÃO 1: Adicionado o maxHttpBufferSize para permitir mídias pesadas no Socket.io
 const io = new Server(server, {
     cors: {
         origin: dominiosAutorizados,
         methods: ['GET', 'POST'],
         credentials: true
     },
-    transports: ['polling', 'websocket']
+    transports: ['polling', 'websocket'],
+    maxHttpBufferSize: 5e7 // 50MB de limite de buffer para tráfego do chat
 });
 
 // --- SCHEMAS ---
@@ -274,7 +277,19 @@ app.put('/api/users/ban', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao processar banimento.' }); }
 });
 
-// --- NOVA ROTA: WIPE COMPLETO DO CHAT ---
+// --- CORREÇÃO 2: ADICIONADA ROTA PARA APAGAR MENSAGENS INDIVIDUAIS ---
+app.delete('/api/chat/:id', async (req, res) => {
+    try {
+        const msgApagada = await Mensagem.findByIdAndDelete(req.params.id);
+        if (!msgApagada) return res.status(404).json({ success: false, message: 'Mensagem não encontrada.' });
+        
+        io.emit('mensagemApagada', req.params.id);
+        res.json({ success: true, message: 'Mensagem removida com sucesso.' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Erro ao apagar mensagem individual.' });
+    }
+});
+
 app.delete('/api/chat/wipe', async (req, res) => {
     try {
         await Mensagem.deleteMany({}); 
@@ -285,7 +300,6 @@ app.delete('/api/chat/wipe', async (req, res) => {
     }
 });
 
-// --- ROTA DE MARCAÇÕES (Para o teu painel) ---
 app.get('/api/marcacoes', async (req, res) => {
     try {
         const lista = await Marcacao.find();
@@ -304,7 +318,6 @@ app.delete('/api/marcacoes/:id', async (req, res) => {
     }
 });
 
-// --- ROTA DE LISTA DE USERS PARA O PAINEL ---
 app.get('/api/users', async (req, res) => {
     try {
         const listaUsers = await User.find();
@@ -314,7 +327,6 @@ app.get('/api/users', async (req, res) => {
     }
 });
 
-// --- INICIALIZAÇÃO DO SERVIDOR ---
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Servidor ativo na porta ${PORT}`);
