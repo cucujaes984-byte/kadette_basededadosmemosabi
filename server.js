@@ -63,7 +63,6 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
-// MODIFICAÇÃO: Inclusão do array de reações dentro do esquema de mensagens
 const mensagemSchema = new mongoose.Schema({
     user: { type: String, required: true },
     texto: { type: String, required: true },
@@ -150,7 +149,7 @@ io.on('connection', async (socket) => {
         const historico = await Mensagem.find().sort({ criadoEm: 1 });
         socket.emit('historicoChat', historico);
     } catch (err) {
-        console.error('Erro ao ler histórico:', err);
+        console.error('Erro ao leer histórico:', err);
     }
 
     socket.on('enviarMensagem', async (dados) => {
@@ -178,7 +177,7 @@ io.on('connection', async (socket) => {
                 tempo: horario,
                 profilePic: fotoFinal,
                 role: cargoFinal,
-                reacoes: [] // Inicializa vazio
+                reacoes: []
             });
             await novaMsg.save();
 
@@ -192,7 +191,6 @@ io.on('connection', async (socket) => {
                 reacoes: novaMsg.reacoes
             });
 
-            // MODIFICAÇÃO DE SEGURANÇA: Bloqueia pings se a mensagem for imagem, gif ou áudio disfarçado em Base64
             if (dados.texto && 
                 !dados.texto.startsWith('__KADETTE_IMG__') && 
                 !dados.texto.startsWith('__KADETTE_GIF__') &&
@@ -215,37 +213,27 @@ io.on('connection', async (socket) => {
         }
     });
 
-    // NOVA FUNCIONALIDADE: Ouvinte Socket para gerir cliques e remoções de reações em tempo real
     socket.on('reagirMensagem', async (dados) => {
         try {
             const { idMensagem, user, emoji } = dados;
-            
             const msg = await Mensagem.findById(idMensagem);
             if (!msg) return;
 
             if (!msg.reacoes) msg.reacoes = [];
-
-            // Verifica se o utilizador já reagiu a esta mensagem
             const reacaoIndex = msg.reacoes.findIndex(r => r.user === user);
 
             if (reacaoIndex !== -1) {
-                // Se clicou exatamente no mesmo emoji, remove-o (retira a reação)
                 if (msg.reacoes[reacaoIndex].emoji === emoji) {
                     msg.reacoes.splice(reacaoIndex, 1);
                 } else {
-                    // Se escolheu um emoji diferente, substitui
                     msg.reacoes[reacaoIndex].emoji = emoji;
                 }
             } else {
-                // Nova reação adicionada ao vetor
                 msg.reacoes.push({ user, emoji });
             }
 
             await msg.save();
-
-            // Broadcast global para atualizar os balões de todos os utilizadores ativos
             io.emit('mensagemAtualizada', msg);
-
         } catch (err) {
             console.error("Erro ao gerir reação no socket:", err);
         }
@@ -374,13 +362,26 @@ app.delete('/api/chat/:id', async (req, res) => {
     }
 });
 
+// ALTERAÇÃO CRÍTICA: Rota Wipe completamente corrigida e sincronizada com ordem de execução estrita
 app.delete('/api/chat/wipe', async (req, res) => {
     try {
-        await Mensagem.deleteMany({}); 
+        // 1. Limpa todas as mensagens da coleção do MongoDB de forma assíncrona
+        const resultado = await Mensagem.deleteMany({}); 
+        
+        console.log(`[WIPE TOTAL] Base de dados limpa. ${resultado.deletedCount} mensagens apagadas.`);
+        
+        // 2. Dispara obrigatoriamente o sinal Socket para limpar o ecrã dos utilizadores conectados AGORA
         io.emit('chatLimpo'); 
-        res.json({ success: true, message: 'Histórico global do chat limpo com sucesso!' });
+        
+        // 3. Responde com sucesso à rota HTTP
+        return res.status(200).json({ 
+            success: true, 
+            message: 'Histórico global do chat limpo com sucesso!',
+            deletedCount: resultado.deletedCount
+        });
     } catch (err) {
-        res.status(500).json({ success: false, message: 'Erro ao limpar a base de dados do chat.' });
+        console.error('Erro crítico ao limpar a base de dados do chat:', err);
+        return res.status(500).json({ success: false, message: 'Erro ao limpar a base de dados do chat.' });
     }
 });
 
