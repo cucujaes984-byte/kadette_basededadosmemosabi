@@ -7,7 +7,7 @@ const { Server } = require('socket.io');
 
 const app = express();
 
-// Aumentado para 50mb para garantir que nenhuma imagem em base64 seja bloqueada no Express
+// Aumentado para 50mb para garantir que nenhuma imagem/áudio em base64 seja bloqueada no Express
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -32,7 +32,7 @@ app.use(cors({
 
 const server = http.createServer(app);
 
-// CORREÇÃO 1: Adicionado o maxHttpBufferSize para permitir mídias pesadas no Socket.io
+// maxHttpBufferSize configurado para 50MB para suportar uploads de imagens e gravações de áudio inline
 const io = new Server(server, {
     cors: {
         origin: dominiosAutorizados,
@@ -63,13 +63,18 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
+// MODIFICAÇÃO: Inclusão do array de reações dentro do esquema de mensagens
 const mensagemSchema = new mongoose.Schema({
     user: { type: String, required: true },
     texto: { type: String, required: true },
     tempo: { type: String, required: true },
     profilePic: { type: String, default: 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png' },
     criadoEm: { type: Date, default: Date.now },
-    role: { type: String, default: 'cliente' }
+    role: { type: String, default: 'cliente' },
+    reacoes: [{
+        user: { type: String, required: true },
+        emoji: { type: String, required: true }
+    }]
 });
 mensagemSchema.index({ criadoEm: 1 }, { expireAfterSeconds: 3600 });
 const Mensagem = mongoose.model('Mensagem', mensagemSchema);
@@ -172,7 +177,8 @@ io.on('connection', async (socket) => {
                 texto: dados.texto,
                 tempo: horario,
                 profilePic: fotoFinal,
-                role: cargoFinal
+                role: cargoFinal,
+                reacoes: [] // Inicializa vazio
             });
             await novaMsg.save();
 
@@ -182,11 +188,16 @@ io.on('connection', async (socket) => {
                 texto: novaMsg.texto,
                 tempo: novaMsg.tempo,
                 profilePic: novaMsg.profilePic,
-                role: novaMsg.role
+                role: novaMsg.role,
+                reacoes: novaMsg.reacoes
             });
 
-            // CORREÇÃO DE SEGURANÇA: Só executa pings se a mensagem for texto simples, prevenindo quebras com Base64
-            if (dados.texto && !dados.texto.startsWith('__KADETTE_IMG__') && !dados.texto.startsWith('__KADETTE_GIF__')) {
+            // MODIFICAÇÃO DE SEGURANÇA: Bloqueia pings se a mensagem for imagem, gif ou áudio disfarçado em Base64
+            if (dados.texto && 
+                !dados.texto.startsWith('__KADETTE_IMG__') && 
+                !dados.texto.startsWith('__KADETTE_GIF__') &&
+                !dados.texto.startsWith('__KADETTE_AUDIO__')) {
+                
                 const textoMensagem = dados.texto.toLowerCase();
                 const regexPing = /@([a-zA-Z0-9_À-ÿ\-]+)/g;
                 let capturas;
@@ -201,6 +212,42 @@ io.on('connection', async (socket) => {
             }
         } catch (err) {
             console.error('Erro ao processar mensagem:', err);
+        }
+    });
+
+    // NOVA FUNCIONALIDADE: Ouvinte Socket para gerir cliques e remoções de reações em tempo real
+    socket.on('reagirMensagem', async (dados) => {
+        try {
+            const { idMensagem, user, emoji } = dados;
+            
+            const msg = await Mensagem.findById(idMensagem);
+            if (!msg) return;
+
+            if (!msg.reacoes) msg.reacoes = [];
+
+            // Verifica se o utilizador já reagiu a esta mensagem
+            const reacaoIndex = msg.reacoes.findIndex(r => r.user === user);
+
+            if (reacaoIndex !== -1) {
+                // Se clicou exatamente no mesmo emoji, remove-o (retira a reação)
+                if (msg.reacoes[reacaoIndex].emoji === emoji) {
+                    msg.reacoes.splice(reacaoIndex, 1);
+                } else {
+                    // Se escolheu um emoji diferente, substitui
+                    msg.reacoes[reacaoIndex].emoji = emoji;
+                }
+            } else {
+                // Nova reação adicionada ao vetor
+                msg.reacoes.push({ user, emoji });
+            }
+
+            await msg.save();
+
+            // Broadcast global para atualizar os balões de todos os utilizadores ativos
+            io.emit('mensagemAtualizada', msg);
+
+        } catch (err) {
+            console.error("Erro ao gerir reação no socket:", err);
         }
     });
 });
@@ -241,7 +288,6 @@ app.post('/api/login', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro na autenticação.' }); }
 });
 
-// INCLUSÃO CRÍTICA: Rota PUT para salvar na BD as alterações de Foto de Perfil e Biografia
 app.put('/api/users/profile', async (req, res) => {
     try {
         const { username, profilePic, bio } = req.body;
