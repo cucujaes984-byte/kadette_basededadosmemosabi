@@ -50,11 +50,14 @@ const marcacaoSchema = new mongoose.Schema({
 });
 const Marcacao = mongoose.model('Marcacao', marcacaoSchema);
 
+// Atualizado com 'role' e 'banned' para o novo sistema de moderação
 const userSchema = new mongoose.Schema({
     username: { type: String, required: true, unique: true },
     password: { type: String, required: true },
     profilePic: { type: String, default: 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png' },
-    bio: { type: String, default: 'Cliente fiel da Kadette Barbershop! ✂️' }
+    bio: { type: String, default: 'Cliente fiel da Kadette Barbershop! ✂️' },
+    role: { type: String, default: 'cliente' }, // 'admin', 'staff', 'cliente'
+    banned: { type: Boolean, default: false }
 });
 const User = mongoose.model('User', userSchema);
 
@@ -63,7 +66,8 @@ const mensagemSchema = new mongoose.Schema({
     texto: { type: String, required: true },
     tempo: { type: String, required: true },
     profilePic: { type: String, default: 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png' },
-    criadoEm: { type: Date, default: Date.now }
+    criadoEm: { type: Date, default: Date.now },
+    role: { type: String, default: 'cliente' } // Guardamos o cargo para renderizar badges retroativos
 });
 mensagemSchema.index({ criadoEm: 1 }, { expireAfterSeconds: 3600 });
 const Mensagem = mongoose.model('Mensagem', mensagemSchema);
@@ -77,13 +81,17 @@ mongoose.connect(MONGO_URI)
         try {
             const salt = await bcrypt.genSalt(10);
             const hashedPassword = await bcrypt.hash('kadette2026', salt);
+            
+            // Forçamos a conta master a ter sempre a role de 'admin' e estar desbanida
             await User.findOneAndUpdate(
                 { username: 'admin' },
                 { 
                     username: 'admin', 
                     password: hashedPassword,
                     profilePic: 'https://cdn-icons-png.flaticon.com/512/2202/2202112.png',
-                    bio: 'Barbeiro Chefe & Administrador do Sistema 💈'
+                    bio: 'Barbeiro Chefe & Administrador do Sistema 💈',
+                    role: 'admin',
+                    banned: false
                 },
                 { upsert: true, new: true }
             );
@@ -100,9 +108,22 @@ const utilizadoresConectados = {};
 io.on('connection', async (socket) => {
     console.log('Utilizador conectado ao Chat.');
 
-    socket.on('registarSocketUser', (username) => {
+    socket.on('registarSocketUser', async (username) => {
         if (username) {
             const userLimpo = username.toLowerCase().trim();
+            
+            // Segurança extra: Verifica logo na ligação WebSocket se a conta está banida
+            try {
+                const checkBan = await User.findOne({ username: userLimpo });
+                if (checkBan && checkBan.banned) {
+                    socket.emit('forcadoASair', 'A tua conta foi banida permanentemente.');
+                    socket.disconnect();
+                    return;
+                }
+            } catch (err) {
+                console.error('Erro ao validar ban no Socket:', err);
+            }
+
             utilizadoresConectados[userLimpo] = socket.id;
             console.log(`Mapeado: ${userLimpo} está online.`);
             io.emit('listaOnline', Object.keys(utilizadoresConectados));
@@ -129,11 +150,21 @@ io.on('connection', async (socket) => {
 
     socket.on('enviarMensagem', async (dados) => {
         try {
+            const userLimpo = dados.user.toLowerCase().trim();
+            
+            // Bloqueia tentativas de contornar o banimento enviando payloads diretos
+            const utilizador = await User.findOne({ username: userLimpo });
+            if (utilizador && utilizador.banned) {
+                socket.emit('forcadoASair', 'Não podes enviar mensagens porque foste banido.');
+                socket.disconnect();
+                return;
+            }
+
             const horario = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
             let fotoFinal = dados.profilePic;
+            let cargoFinal = utilizador ? utilizador.role : 'cliente';
             
             if (!fotoFinal || fotoFinal.trim() === '' || fotoFinal.includes('3135715.png')) {
-                const utilizador = await User.findOne({ username: dados.user.toLowerCase().trim() });
                 fotoFinal = utilizador ? utilizador.profilePic : 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png';
             }
 
@@ -141,7 +172,8 @@ io.on('connection', async (socket) => {
                 user: dados.user,
                 texto: dados.texto,
                 tempo: horario,
-                profilePic: fotoFinal
+                profilePic: fotoFinal,
+                role: cargoFinal
             });
             await novaMsg.save();
 
@@ -150,7 +182,8 @@ io.on('connection', async (socket) => {
                 user: novaMsg.user,
                 texto: novaMsg.texto,
                 tempo: novaMsg.tempo,
-                profilePic: novaMsg.profilePic
+                profilePic: novaMsg.profilePic,
+                role: novaMsg.role
             });
 
             const textoMensagem = dados.texto.toLowerCase();
@@ -182,7 +215,9 @@ app.post('/api/register', async (req, res) => {
         if (userExists) return res.status(400).json({ message: 'Este utilizador já existe.' });
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
-        const newUser = new User({ username: usernameLimpo, password: hashedPassword });
+        
+        // Contas novas começam sempre por padrão com a role 'cliente'
+        const newUser = new User({ username: usernameLimpo, password: hashedPassword, role: 'cliente' });
         await newUser.save();
         res.status(201).json({ success: true });
     } catch (err) { res.status(500).json({ message: 'Erro no registo.' }); }
@@ -195,77 +230,56 @@ app.post('/api/login', async (req, res) => {
         const usernameLimpo = username.toLowerCase().trim();
         const user = await User.findOne({ username: usernameLimpo });
         if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
+        
+        // Bloqueia o login imediatamente caso esteja marcado como banido
+        if (user.banned) return res.status(403).json({ message: 'Esta conta foi banida permanentemente da plataforma.' });
+
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ message: 'Credenciais inválidas.' });
-        res.json({ success: true, username: user.username, profilePic: user.profilePic, bio: user.bio });
+        
+        // Retornamos também a role para o painel front-end gerir permissões
+        res.json({ success: true, username: user.username, profilePic: user.profilePic, bio: user.bio, role: user.role });
     } catch (err) { res.status(500).json({ message: 'Erro na autenticação.' }); }
 });
 
-app.put('/api/users/profile', async (req, res) => {
+// GESTÃO DE ROLES (Apenas Admin pode invocar)
+app.put('/api/users/role', async (req, res) => {
     try {
-        const { username, profilePic, bio } = req.body;
-        if (!username) return res.status(400).json({ message: 'Utilizador não identificado.' });
-        const userAtualizado = await User.findOneAndUpdate({ username: username.toLowerCase().trim() }, { profilePic, bio }, { new: true });
-        if (!userAtualizado) return res.status(404).json({ message: 'Utilizador não encontrado.' });
-        res.json({ success: true, profilePic: userAtualizado.profilePic, bio: userAtualizado.bio });
-    } catch (err) { res.status(500).json({ message: 'Erro ao atualizar perfil.' }); }
+        const { username, novoRole } = req.body;
+        const targetUser = username.toLowerCase().trim();
+        
+        if (targetUser === 'admin') return res.status(400).json({ message: 'Não podes alterar o cargo do administrador principal.' });
+        if (!['cliente', 'staff'].includes(novoRole)) return res.status(400).json({ message: 'Cargo inválido fornecido.' });
+
+        const atualizado = await User.findOneAndUpdate({ username: targetUser }, { role: novoRole }, { new: true });
+        if (!atualizado) return res.status(404).json({ message: 'Utilizador não encontrado.' });
+
+        res.json({ success: true, message: `Cargo de ${atualizado.username} alterado com sucesso para ${novoRole}!` });
+    } catch (err) { res.status(500).json({ message: 'Erro ao processar alteração de cargo.' }); }
 });
 
-app.get('/api/users', async (req, res) => {
+// GESTÃO DE BANIMENTOS (Apenas Admin)
+app.put('/api/users/ban', async (req, res) => {
     try {
-        const requester = req.query.adminUser;
-        const deChat = req.query.fromChat === 'true';
+        const { username } = req.body;
+        const targetUser = username.toLowerCase().trim();
 
-        if ((requester && requester.toLowerCase() === 'admin') || deChat) {
-            const listaClientes = await User.find().select('username profilePic bio');
-            return res.json(listaClientes);
+        if (targetUser === 'admin') return res.status(400).json({ message: 'Operação proibida. O administrador principal é imune.' });
+
+        const utilizador = await User.findOneAndUpdate({ username: targetUser }, { banned: true }, { new: true });
+        if (!utilizador) return res.status(404).json({ message: 'Utilizador não encontrado no sistema.' });
+
+        // Kick em tempo real: Dispara o gatilho WebSocket global para desconexão imediata
+        io.emit('utilizadorBanidoKick', targetUser);
+
+        // Remove o socket da memória de utilizadores online no servidor se ele lá estiver
+        const socketIdInfrator = utilizadoresConectados[targetUser];
+        if (socketIdInfrator) {
+            const socketAlvo = io.sockets.sockets.get(socketIdInfrator);
+            if (socketAlvo) socketAlvo.disconnect();
+            delete utilizadoresConectados[targetUser];
+            io.emit('listaOnline', Object.keys(utilizadoresConectados));
         }
-        return res.status(403).json({ message: 'Acesso negado.' });
-    } catch (err) { res.status(500).json({ message: 'Erro ao listar contas.' }); }
-});
 
-app.delete('/api/users/:username', async (req, res) => {
-    try {
-        const targetUser = req.params.username.toLowerCase().trim();
-        await User.findOneAndDelete({ username: targetUser });
-        await Marcacao.deleteMany({ username: targetUser }); 
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ message: 'Erro ao remover conta.' }); }
-});
-
-app.get('/api/marcacoes', async (req, res) => {
-    try {
-        const queryUser = req.query.user;
-        if (!queryUser) return res.status(400).json({ message: 'Falta identificação.' });
-        let lista = queryUser.toLowerCase().trim() === 'admin' ? await Marcacao.find() : await Marcacao.find({ username: queryUser.toLowerCase().trim() });
-        res.json(lista);
-    } catch (err) { res.status(500).json({ message: 'Erro ao ler agenda.' }); }
-});
-
-app.post('/api/marcacoes', async (req, res) => {
-    try {
-        const { username, nome, servico, data, hora } = req.body;
-        const novaMarcacao = new Marcacao({ username: username.toLowerCase().trim(), nome, servico, data, hora });
-        await novaMarcacao.save();
-        res.status(201).json({ success: true });
-    } catch (err) { res.status(500).json({ message: 'Erro ao salvar marcação.' }); }
-});
-
-app.delete('/api/marcacoes/:id', async (req, res) => {
-    try {
-        await Marcacao.findByIdAndDelete(req.params.id);
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ message: 'Erro ao remover agendamento.' }); }
-});
-
-// AQUI ESTÁ A CORREÇÃO SINTÁTICA EXATA DA LINHA QUE ESTAVA A DAR ERRO
-app.delete('/api/chat/:id', async (req, res) => {
-    try {
-        await Mensagem.findByIdAndDelete(req.params.id);
-        io.emit('mensagemApagada', req.params.id);
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ message: 'Erro ao apagar mensagem.' }); }
-});
-
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`Servidor Kadette ativo na porta ${PORT}`));
+        res.json({ success: true, message: `O utilizador ${utilizador.username} foi banido e expulso do ecossistema.` });
+    } catch (err) { res.status(500).json({ message: 'Erro ao processar banimento.' }); }
