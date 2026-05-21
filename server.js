@@ -1,58 +1,445 @@
 const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const http = require('http'); 
+const { Server } = require('socket.io'); 
 
 const app = express();
-app.use(cors());
-app.use(express.json());
 
-mongoose.connect('mongodb://localhost:27017/chat');
+// Aumentado para 50mb para garantir que nenhuma imagem/áudio em base64 seja bloqueada no Express
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-const mensagemSchema = new mongoose.Schema({
-    texto: String,
-    criadoEm: { type: Date, default: Date.now }
-});
+const dominiosAutorizados = [
+    'https://kadette.club',
+    'https://www.kadette.club',
+    'https://fragrant-glitter-6d36.cucujaes984.workers.dev'
+];
 
-// auto delete após 1h (opcional)
-mensagemSchema.index({ criadoEm: 1 }, { expireAfterSeconds: 3600 });
-
-const Mensagem = mongoose.model('Mensagem', mensagemSchema);
+app.use(cors({
+    origin: function (origin, callback) {
+        if (!origin || dominiosAutorizados.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error('Bloqueado pelo CORS da Kadette Barbershop'));
+        }
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+}));
 
 const server = http.createServer(app);
+
+// maxHttpBufferSize configurado para 50MB para suportar uploads de imagens e gravações de áudio inline
 const io = new Server(server, {
-    cors: { origin: '*' }
+    cors: {
+        origin: dominiosAutorizados,
+        methods: ['GET', 'POST'],
+        credentials: true
+    },
+    transports: ['polling', 'websocket'],
+    maxHttpBufferSize: 5e7 // 50MB de limite de buffer para tráfego do chat
 });
 
-// 🔥 WIPE VIA API
-app.delete('/api/chat/wipe', async (req, res) => {
-    await Mensagem.deleteMany({});
-    io.emit('chatLimpo'); // 🔥 avisa TODOS
-    res.json({ success: true });
+// --- SCHEMAS ---
+const marcacaoSchema = new mongoose.Schema({
+    username: { type: String, required: true }, 
+    nome: { type: String, required: true },
+    servico: { type: String, required: true },
+    data: { type: String, required: true },
+    hora: { type: String, required: true }
 });
+const Marcacao = mongoose.model('Marcacao', marcacaoSchema);
+
+const userSchema = new mongoose.Schema({
+    username: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    profilePic: { type: String, default: 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png' },
+    bio: { type: String, default: 'Cliente fiel da Kadette Barbershop! ✂️' },
+    role: { type: String, default: 'cliente' }, 
+    banned: { type: Boolean, default: false }
+});
+const User = mongoose.model('User', userSchema);
+
+const mensagemSchema = new mongoose.Schema({
+    user: { type: String, required: true },
+    texto: { type: String, required: true },
+    tempo: { type: String, required: true },
+    profilePic: { type: String, default: 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png' },
+    criadoEm: { type: Date, default: Date.now },
+    role: { type: String, default: 'cliente' },
+    reacoes: [{
+        user: { type: String, required: true },
+        emoji: { type: String, required: true }
+    }]
+});
+mensagemSchema.index({ criadoEm: 1 }, { expireAfterSeconds: 3600 });
+const Mensagem = mongoose.model('Mensagem', mensagemSchema);
+
+// --- LIGAÇÃO MONGODB ---
+const MONGO_URI = 'mongodb+srv://sioteconta_db_user:l5BMU5cyhppKjTe4@cluster.orny929.mongodb.net/kadette_barber?appName=Cluster';
+
+mongoose.connect(MONGO_URI)
+    .then(async () => {
+        console.log('Sistemas de dados synchronized com o MongoDB.');
+        try {
+            const salt = await bcrypt.genSalt(10);
+            const hashedPassword = await bcrypt.hash('kadette2026', salt);
+            
+            await User.findOneAndUpdate(
+                { username: 'admin' },
+                { 
+                    username: 'admin', 
+                    password: hashedPassword,
+                    profilePic: 'https://cdn-icons-png.flaticon.com/512/2202/2202112.png',
+                    bio: 'Barbeiro Chefe & Administrador do Sistema 💈',
+                    role: 'admin',
+                    banned: false
+                },
+                { upsert: true, new: true }
+            );
+            console.log('--- CONTA MASTER "admin" SINCRONIZADA ---');
+        } catch (err) {
+            console.error('Erro ao injectar conta admin:', err);
+        }
+    })
+    .catch(err => console.error('Erro fatal na ligação de dados:', err));
+
+// --- LÓGICA EM TEMPO REAL (SOCKET.IO) ---
+const utilizadoresConectados = {}; 
 
 io.on('connection', async (socket) => {
+    console.log('Utilizador conectado ao Chat.');
 
-    console.log('User conectado');
+    socket.on('registarSocketUser', async (username) => {
+        if (username) {
+            const userLimpo = username.toLowerCase().trim();
+            
+            try {
+                const checkBan = await User.findOne({ username: userLimpo });
+                if (checkBan && checkBan.banned) {
+                    socket.emit('forcadoASair', 'A tua conta foi banida permanentemente.');
+                    socket.disconnect(true);
+                    return;
+                }
+            } catch (err) {
+                console.error('Erro ao validar ban no Socket:', err);
+            }
 
-    // enviar histórico
-    const historico = await Mensagem.find().sort({ criadoEm: 1 });
-    socket.emit('historicoChat', historico);
-
-    // nova mensagem
-    socket.on('novaMensagem', async (msg) => {
-        const nova = await Mensagem.create({ texto: msg });
-        io.emit('mensagem', nova);
+            utilizadoresConectados[userLimpo] = socket.id;
+            console.log(`Mapeado: ${userLimpo} está online.`);
+            io.emit('listaOnline', Object.keys(utilizadoresConectados));
+        }
     });
 
-    // 🔥 WIPE VIA SOCKET (melhor método)
-    socket.on('solicitarWipeChat', async () => {
-        await Mensagem.deleteMany({});
-        io.emit('chatLimpo');
+    socket.on('disconnect', () => {
+        for (const username in utilizadoresConectados) {
+            if (utilizadoresConectados[username] === socket.id) {
+                console.log(`Utilizador ${username} ficou offline.`);
+                delete utilizadoresConectados[username];
+                io.emit('listaOnline', Object.keys(utilizadoresConectados));
+                break;
+            }
+        }
+    });
+
+    try {
+        const historico = await Mensagem.find().sort({ criadoEm: 1 });
+        socket.emit('historicoChat', historico);
+    } catch (err) {
+        console.error('Erro ao leer histórico:', err);
+    }
+
+    socket.on('enviarMensagem', async (dados) => {
+        try {
+            const userLimpo = dados.user.toLowerCase().trim();
+            
+            const utilizador = await User.findOne({ username: userLimpo });
+            if (utilizador && utilizador.banned) {
+                socket.emit('forcadoASair', 'Não podes enviar mensagens porque foste banido da plataforma.');
+                socket.disconnect(true);
+                return;
+            }
+
+            const horario = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+            let fotoFinal = dados.profilePic;
+            let cargoFinal = utilizador ? utilizador.role : 'cliente';
+            
+            if (!fotoFinal || fotoFinal.trim() === '' || fotoFinal.includes('3135715.png')) {
+                fotoFinal = utilizador ? utilizador.profilePic : 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png';
+            }
+
+            const novaMsg = new Mensagem({
+                user: dados.user,
+                texto: dados.texto,
+                tempo: horario,
+                profilePic: fotoFinal,
+                role: cargoFinal,
+                reacoes: []
+            });
+            await novaMsg.save();
+
+            io.emit('receberMensagem', {
+                _id: novaMsg._id,
+                user: novaMsg.user,
+                texto: novaMsg.texto,
+                tempo: novaMsg.tempo,
+                profilePic: novaMsg.profilePic,
+                role: novaMsg.role,
+                reacoes: novaMsg.reacoes
+            });
+
+            if (dados.texto && 
+                !dados.texto.startsWith('__KADETTE_IMG__') && 
+                !dados.texto.startsWith('__KADETTE_GIF__') &&
+                !dados.texto.startsWith('__KADETTE_AUDIO__')) {
+                
+                const textoMensagem = dados.texto.toLowerCase();
+                const regexPing = /@([a-zA-Z0-9_À-ÿ\-]+)/g;
+                let capturas;
+                while ((capturas = regexPing.exec(textoMensagem)) !== null) {
+                    const userPingado = capturas[1].trim();
+                    if (userPingado === dados.user.toLowerCase().trim()) continue;
+                    const socketTargetId = utilizadoresConectados[userPingado];
+                    if (socketTargetId) {
+                        io.to(socketTargetId).emit('notificacaoPing', { porUser: dados.user });
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Erro ao processar mensagem:', err);
+        }
+    });
+
+    socket.on('reagirMensagem', async (dados) => {
+        try {
+            const { idMensagem, user, emoji } = dados;
+            const msg = await Mensagem.findById(idMensagem);
+            if (!msg) return;
+
+            if (!msg.reacoes) msg.reacoes = [];
+            const reacaoIndex = msg.reacoes.findIndex(r => r.user === user);
+
+            if (reacaoIndex !== -1) {
+                if (msg.reacoes[reacaoIndex].emoji === emoji) {
+                    msg.reacoes.splice(reacaoIndex, 1);
+                } else {
+                    msg.reacoes[reacaoIndex].emoji = emoji;
+                }
+            } else {
+                msg.reacoes.push({ user, emoji });
+            }
+
+            await msg.save();
+            io.emit('mensagemAtualizada', msg);
+        } catch (err) {
+            console.error("Erro ao gerir reação no socket:", err);
+        }
+    });
+
+    // SISTEMA DE WIPE VIA EVENTO SOCKET PROTEGIDO (Garante funcionamento instantâneo e seguro)
+    socket.on('solicitarWipeChat', async (dados) => {
+        try {
+            if (!dados || !dados.username) return;
+            const quemPediu = dados.username.toLowerCase().trim();
+
+            // Validação de segurança na Base de Dados
+            const userDb = await User.findOne({ username: quemPediu });
+            if (!userDb || (userDb.role !== 'admin' && userDb.role !== 'staff')) {
+                console.log(`[WIPE NEGADO] Tentativa não autorizada detetada por: ${quemPediu}`);
+                socket.emit('forcadoASair', 'Não tens permissões de moderador para limpar o chat.');
+                socket.disconnect(true);
+                return;
+            }
+
+            const resultado = await Mensagem.deleteMany({});
+            console.log(`[WIPE VIA SOCKET] Base de dados limpa por ${userDb.username}. ${resultado.deletedCount} mensagens apagadas.`);
+            io.emit('chatLimpo');
+        } catch (err) {
+            console.error('Erro fatal ao processar wipe via socket:', err);
+        }
     });
 });
 
-server.listen(3000, () => {
-    console.log('Servidor a correr na porta 3000');
+// --- ROTAS DA API ---
+
+app.post('/api/register', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) return res.status(400).json({ message: 'Campos em falta.' });
+        const usernameLimpo = username.toLowerCase().trim();
+        if (usernameLimpo === 'admin') return res.status(400).json({ message: 'Nome indisponível.' });
+        const userExists = await User.findOne({ username: usernameLimpo });
+        if (userExists) return res.status(400).json({ message: 'Este utilizador já existe.' });
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+        
+        const newUser = new User({ username: usernameLimpo, password: hashedPassword, role: 'cliente' });
+        await newUser.save();
+        res.status(201).json({ success: true });
+    } catch (err) { res.status(500).json({ message: 'Erro no registo.' }); }
+});
+
+app.post('/api/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) return res.status(400).json({ message: 'Campos em falta.' });
+        const usernameLimpo = username.toLowerCase().trim();
+        const user = await User.findOne({ username: usernameLimpo });
+        if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
+        
+        if (user.banned) return res.status(403).json({ message: 'Esta conta foi banida permanentemente da plataforma.' });
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) return res.status(401).json({ message: 'Credenciais inválidas.' });
+        
+        res.json({ success: true, username: user.username, profilePic: user.profilePic, bio: user.bio, role: user.role });
+    } catch (err) { res.status(500).json({ message: 'Erro na autenticação.' }); }
+});
+
+app.put('/api/users/profile', async (req, res) => {
+    try {
+        const { username, profilePic, bio } = req.body;
+        if (!username) return res.status(400).json({ success: false, message: 'Identificação do utilizador em falta.' });
+
+        const usernameLimpo = username.toLowerCase().trim();
+        const dadosAtualizar = {};
+        
+        if (profilePic !== undefined) dadosAtualizar.profilePic = profilePic;
+        if (bio !== undefined) dadosAtualizar.bio = bio;
+
+        const utilizadorAtualizado = await User.findOneAndUpdate(
+            { username: usernameLimpo },
+            { $set: dadosAtualizar },
+            { new: true }
+        );
+
+        if (!utilizadorAtualizado) return res.status(404).json({ success: false, message: 'Utilizador não encontrado.' });
+
+        res.json({
+            success: true,
+            message: 'Perfil guardado com sucesso!',
+            user: {
+                username: utilizadorAtualizado.username,
+                profilePic: utilizadorAtualizado.profilePic,
+                bio: utilizadorAtualizado.bio,
+                role: utilizadorAtualizado.role
+            }
+        });
+    } catch (err) {
+        console.error('Erro ao atualizar perfil:', err);
+        res.status(500).json({ success: false, message: 'Erro ao guardar alterações de perfil.' });
+    }
+});
+
+app.put('/api/users/role', async (req, res) => {
+    try {
+        const { username, novoRole } = req.body;
+        const targetUser = username.toLowerCase().trim();
+        
+        if (targetUser === 'admin') return res.status(400).json({ message: 'Não podes alterar o cargo do administrador principal.' });
+        if (!['cliente', 'staff'].includes(novoRole)) return res.status(400).json({ message: 'Cargo inválido fornecido.' });
+
+        const atualizado = await User.findOneAndUpdate({ username: targetUser }, { role: novoRole }, { new: true });
+        if (!atualizado) return res.status(404).json({ message: 'Utilizador não encontrado.' });
+
+        res.json({ success: true, message: `Cargo de ${atualizado.username} alterado com sucesso para ${novoRole}!` });
+    } catch (err) { res.status(500).json({ message: 'Erro ao processar alteração de cargo.' }); }
+});
+
+app.put('/api/users/ban', async (req, res) => {
+    try {
+        const { username } = req.body;
+        if (!username) return res.status(400).json({ message: 'Nome de utilizador em falta.' });
+        
+        const targetUser = username.toLowerCase().trim();
+
+        if (targetUser === 'admin') return res.status(400).json({ message: 'Operação proibida. O administrador principal é imune.' });
+
+        const utilizadorApagado = await User.findOneAndDelete({ username: targetUser });
+        if (!utilizadorApagado) return res.status(404).json({ message: 'Utilizador não encontrado no sistema.' });
+
+        io.emit('utilizadorBanidoKick', targetUser);
+
+        const socketIdInfrator = utilizadoresConectados[targetUser];
+        if (socketIdInfrator) {
+            const socketAlvo = io.sockets.sockets.get(socketIdInfrator);
+            if (socketAlvo) {
+                socketAlvo.emit('forcadoASair', 'A tua conta foi eliminada e foste banido da plataforma.');
+                socketAlvo.disconnect(true);
+                console.log(`[BAN SYSTEM] O utilizador ${targetUser} foi eliminado e o seu socket destruído.`);
+            }
+            delete utilizadoresConectados[targetUser];
+            io.emit('listaOnline', Object.keys(utilizadoresConectados));
+        }
+
+        return res.json({ success: true, message: `O utilizador ${utilizadorApagado.username} foi totalmente removido da base de dados.` });
+    } catch (err) { 
+        console.error('Erro na execução da rota de ban:', err);
+        return res.status(500).json({ message: 'Erro ao processar banimento.' }); 
+    }
+});
+
+// FIX DE ROTAS HTTP: A rota do Wipe foi movida para cima para evitar conflitos com o parâmetro dinâmico ":id"
+app.delete('/api/chat/wipe', async (req, res) => {
+    try {
+        const resultado = await Mensagem.deleteMany({}); 
+        console.log(`[WIPE TOTAL HTTP] Base de dados limpa. ${resultado.deletedCount} mensagens apagadas.`);
+        
+        io.emit('chatLimpo'); 
+        return res.status(200).json({ 
+            success: true, 
+            message: 'Histórico global do chat limpo com sucesso!',
+            deletedCount: resultado.deletedCount
+        });
+    } catch (err) {
+        console.error('Erro crítico ao limpar a base de dados do chat:', err);
+        return res.status(500).json({ success: false, message: 'Erro ao limpar a base de dados do chat.' });
+    }
+});
+
+app.delete('/api/chat/:id', async (req, res) => {
+    try {
+        const msgApagada = await Mensagem.findByIdAndDelete(req.params.id);
+        if (!msgApagada) return res.status(404).json({ success: false, message: 'Mensagem não encontrada.' });
+        
+        io.emit('mensagemApagada', req.params.id);
+        res.json({ success: true, message: 'Mensagem removida com sucesso.' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Erro ao apagar mensagem individual.' });
+    }
+});
+
+app.get('/api/marcacoes', async (req, res) => {
+    try {
+        const lista = await Marcacao.find();
+        res.json(lista);
+    } catch (err) {
+        res.status(500).json({ message: 'Erro ao carregar marcações.' });
+    }
+});
+
+app.delete('/api/marcacoes/:id', async (req, res) => {
+    try {
+        await Marcacao.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: 'Agendamento cancelado.' });
+    } catch (err) {
+        res.status(500).json({ message: 'Erro ao eliminar marcação.' });
+    }
+});
+
+app.get('/api/users', async (req, res) => {
+    try {
+        const listaUsers = await User.find();
+        res.json(listaUsers);
+    } catch (err) {
+        res.status(500).json({ message: 'Erro ao carregar utilizadores.' });
+    }
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`Servidor ativo na porta ${PORT}`);
 });
