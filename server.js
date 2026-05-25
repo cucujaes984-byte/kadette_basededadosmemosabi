@@ -153,6 +153,9 @@ io.on('connection', async (socket) => {
         }
     });
 
+    // Auto-join global room on connect so messages are received immediately
+    socket.join('global');
+
     try {
         const historico = await Mensagem.find().sort({ criadoEm: 1 });
         socket.emit('historicoChat', historico);
@@ -304,9 +307,7 @@ io.on('connection', async (socket) => {
             if (socketDestinatario) {
                 io.to(socketDestinatario).emit('receberDM', msgPayload);
             }
-
-            // Devolve ao remetente também (para confirmar)
-            socket.emit('receberDM', msgPayload);
+            // Nota: não reenviamos ao remetente — o cliente já mostra localmente
 
         } catch (err) {
             console.error('Erro ao processar DM:', err);
