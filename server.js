@@ -189,14 +189,16 @@ io.on('connection', async (socket) => {
             });
             await novaMsg.save();
 
-            io.emit('receberMensagem', {
+            const canalMsg = dados.canal || 'global';
+            io.to(canalMsg).emit('receberMensagem', {
                 _id: novaMsg._id,
                 user: novaMsg.user,
                 texto: novaMsg.texto,
                 tempo: novaMsg.tempo,
                 profilePic: novaMsg.profilePic,
                 role: novaMsg.role,
-                reacoes: novaMsg.reacoes
+                reacoes: novaMsg.reacoes,
+                canal: canalMsg
             });
 
             if (dados.texto && 
@@ -244,6 +246,91 @@ io.on('connection', async (socket) => {
             io.emit('mensagemAtualizada', msg);
         } catch (err) {
             console.error("Erro ao gerir reação no socket:", err);
+        }
+    });
+
+    // ── CANAIS ──
+    socket.on('joinChannel', (dados) => {
+        // Sai de todas as salas de canal anteriores (mantém a sala do socket próprio)
+        const { canal, user } = dados;
+        if (!canal || canal.startsWith('__')) return;
+        // Deixa canais antigos
+        socket.rooms.forEach(room => {
+            if (room !== socket.id) socket.leave(room);
+        });
+        socket.join(canal);
+        // Envia histórico do canal pedido (só do canal 'global' está em BD; outros ficam em memória no cliente)
+        if (canal === 'global') {
+            Mensagem.find().sort({ criadoEm: 1 })
+                .then(historico => socket.emit('historicoChat', historico))
+                .catch(err => console.error('Erro ao carregar histórico do canal:', err));
+        } else {
+            // Para outros canais envia histórico vazio — o cliente já tem em cache
+            socket.emit('historicoChat', []);
+        }
+    });
+
+    // ── MENSAGENS DIRETAS (DMs) ──
+    socket.on('enviarDM', async (dados) => {
+        try {
+            const { user, para, texto, profilePic, tempo } = dados;
+            if (!user || !para || !texto) return;
+
+            const userLimpo = user.toLowerCase().trim();
+            const paraLimpo = para.toLowerCase().trim();
+
+            // Valida ban
+            const utilizador = await User.findOne({ username: userLimpo });
+            if (utilizador && utilizador.banned) {
+                socket.emit('forcadoASair', 'Não podes enviar mensagens porque foste banido da plataforma.');
+                socket.disconnect(true);
+                return;
+            }
+
+            const horario = tempo || new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+
+            const msgPayload = {
+                _id: new (require('mongoose').Types.ObjectId)().toString(),
+                user,
+                para,
+                texto,
+                tempo: horario,
+                profilePic: profilePic || '',
+                role: utilizador ? utilizador.role : 'cliente'
+            };
+
+            // Envia ao destinatário (se online)
+            const socketDestinatario = utilizadoresConectados[paraLimpo];
+            if (socketDestinatario) {
+                io.to(socketDestinatario).emit('receberDM', msgPayload);
+            }
+
+            // Devolve ao remetente também (para confirmar)
+            socket.emit('receberDM', msgPayload);
+
+        } catch (err) {
+            console.error('Erro ao processar DM:', err);
+        }
+    });
+
+    // ── INDICADOR DE ESCRITA EM DM ──
+    socket.on('dmTyping', (dados) => {
+        const { user, para } = dados;
+        if (!user || !para) return;
+        const paraLimpo = para.toLowerCase().trim();
+        const socketDest = utilizadoresConectados[paraLimpo];
+        if (socketDest) {
+            io.to(socketDest).emit('dmTyping', { user, para });
+        }
+    });
+
+    socket.on('dmStopTyping', (dados) => {
+        const { user, para } = dados;
+        if (!user || !para) return;
+        const paraLimpo = para.toLowerCase().trim();
+        const socketDest = utilizadoresConectados[paraLimpo];
+        if (socketDest) {
+            io.to(socketDest).emit('dmStopTyping', { user, para });
         }
     });
 
