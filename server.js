@@ -4,19 +4,19 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const http = require('http'); 
 const { Server } = require('socket.io'); 
-
+ 
 const app = express();
-
+ 
 // Aumentado para 50mb para garantir que nenhuma imagem/áudio em base64 seja bloqueada no Express
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
+ 
 const dominiosAutorizados = [
     'https://kadette.club',
     'https://www.kadette.club',
     'https://fragrant-glitter-6d36.cucujaes984.workers.dev'
 ];
-
+ 
 app.use(cors({
     origin: function (origin, callback) {
         if (!origin || dominiosAutorizados.indexOf(origin) !== -1) {
@@ -29,9 +29,9 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
 }));
-
+ 
 const server = http.createServer(app);
-
+ 
 // maxHttpBufferSize configurado para 50MB para suportar uploads de imagens e gravações de áudio inline
 const io = new Server(server, {
     maxHttpBufferSize: 50 * 1024 * 1024, // Os teus 50MB atuais
@@ -50,7 +50,7 @@ const io = new Server(server, {
     pingTimeout: 60000,  // Espera até 60 segundos antes de derrubar a conexão por falta de resposta
     pingInterval: 25000  // Envia um sinal de vida a cada 25 segundos
 });
-
+ 
 // --- SCHEMAS ---
 const marcacaoSchema = new mongoose.Schema({
     username: { type: String, required: true }, 
@@ -60,7 +60,7 @@ const marcacaoSchema = new mongoose.Schema({
     hora: { type: String, required: true }
 });
 const Marcacao = mongoose.model('Marcacao', marcacaoSchema);
-
+ 
 const userSchema = new mongoose.Schema({
     username: { type: String, required: true, unique: true },
     password: { type: String, required: true },
@@ -70,7 +70,7 @@ const userSchema = new mongoose.Schema({
     banned: { type: Boolean, default: false }
 });
 const User = mongoose.model('User', userSchema);
-
+ 
 const mensagemSchema = new mongoose.Schema({
     user: { type: String, required: true },
     texto: { type: String, required: true },
@@ -86,10 +86,10 @@ const mensagemSchema = new mongoose.Schema({
 });
 mensagemSchema.index({ criadoEm: 1 }, { expireAfterSeconds: 3600 });
 const Mensagem = mongoose.model('Mensagem', mensagemSchema);
-
+ 
 // --- LIGAÇÃO MONGODB ---
 const MONGO_URI = 'mongodb+srv://sioteconta_db_user:l5BMU5cyhppKjTe4@cluster.orny929.mongodb.net/kadette_barber?appName=Cluster';
-
+ 
 mongoose.connect(MONGO_URI)
     .then(async () => {
         console.log('Sistemas de dados synchronized com o MongoDB.');
@@ -115,13 +115,13 @@ mongoose.connect(MONGO_URI)
         }
     })
     .catch(err => console.error('Erro fatal na ligação de dados:', err));
-
+ 
 // --- LÓGICA EM TEMPO REAL (SOCKET.IO) ---
 const utilizadoresConectados = {}; 
-
+ 
 io.on('connection', async (socket) => {
     console.log('Utilizador conectado ao Chat.');
-
+ 
     socket.on('registarSocketUser', async (username) => {
         if (username) {
             const userLimpo = username.toLowerCase().trim();
@@ -136,13 +136,13 @@ io.on('connection', async (socket) => {
             } catch (err) {
                 console.error('Erro ao validar ban no Socket:', err);
             }
-
+ 
             utilizadoresConectados[userLimpo] = socket.id;
             console.log(`Mapeado: ${userLimpo} está online.`);
             io.emit('listaOnline', Object.keys(utilizadoresConectados));
         }
     });
-
+ 
     socket.on('disconnect', () => {
         for (const username in utilizadoresConectados) {
             if (utilizadoresConectados[username] === socket.id) {
@@ -153,14 +153,14 @@ io.on('connection', async (socket) => {
             }
         }
     });
-
+ 
     try {
         const historico = await Mensagem.find().sort({ criadoEm: 1 });
         socket.emit('historicoChat', historico);
     } catch (err) {
         console.error('Erro ao leer histórico:', err);
     }
-
+ 
     socket.on('enviarMensagem', async (dados) => {
         try {
             const userLimpo = dados.user.toLowerCase().trim();
@@ -171,7 +171,7 @@ io.on('connection', async (socket) => {
                 socket.disconnect(true);
                 return;
             }
-
+ 
             const horario = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
             let fotoFinal = dados.profilePic;
             let cargoFinal = utilizador ? utilizador.role : 'cliente';
@@ -179,7 +179,7 @@ io.on('connection', async (socket) => {
             if (!fotoFinal || fotoFinal.trim() === '' || fotoFinal.includes('3135715.png')) {
                 fotoFinal = utilizador ? utilizador.profilePic : 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png';
             }
-
+ 
             const novaMsg = new Mensagem({
                 user: dados.user,
                 texto: dados.texto,
@@ -190,7 +190,7 @@ io.on('connection', async (socket) => {
                 reacoes: []
             });
             await novaMsg.save();
-
+ 
             const canalMsg = dados.canal || 'global';
             io.emit('receberMensagem', {
                 _id: novaMsg._id,
@@ -202,7 +202,7 @@ io.on('connection', async (socket) => {
                 reacoes: novaMsg.reacoes,
                 canal: canalMsg
             });
-
+ 
             if (dados.texto && 
                 !dados.texto.startsWith('__KADETTE_IMG__') && 
                 !dados.texto.startsWith('__KADETTE_GIF__') &&
@@ -224,16 +224,16 @@ io.on('connection', async (socket) => {
             console.error('Erro ao processar mensagem:', err);
         }
     });
-
+ 
     socket.on('reagirMensagem', async (dados) => {
         try {
             const { idMensagem, user, emoji } = dados;
             const msg = await Mensagem.findById(idMensagem);
             if (!msg) return;
-
+ 
             if (!msg.reacoes) msg.reacoes = [];
             const reacaoIndex = msg.reacoes.findIndex(r => r.user === user);
-
+ 
             if (reacaoIndex !== -1) {
                 if (msg.reacoes[reacaoIndex].emoji === emoji) {
                     msg.reacoes.splice(reacaoIndex, 1);
@@ -243,14 +243,14 @@ io.on('connection', async (socket) => {
             } else {
                 msg.reacoes.push({ user, emoji });
             }
-
+ 
             await msg.save();
             io.emit('mensagemAtualizada', msg);
         } catch (err) {
             console.error("Erro ao gerir reação no socket:", err);
         }
     });
-
+ 
     // ── CANAIS ──
     // Mensagens usam io.emit (broadcast) — cliente filtra pelo campo canal.
     // joinChannel serve apenas para recarregar o histórico ao mudar de canal.
@@ -265,16 +265,16 @@ io.on('connection', async (socket) => {
             socket.emit('historicoChat', []);
         }
     });
-
+ 
     // ── MENSAGENS DIRETAS (DMs) ──
     socket.on('enviarDM', async (dados) => {
         try {
             const { user, para, texto, profilePic, tempo } = dados;
             if (!user || !para || !texto) return;
-
+ 
             const userLimpo = user.toLowerCase().trim();
             const paraLimpo = para.toLowerCase().trim();
-
+ 
             // Valida ban
             const utilizador = await User.findOne({ username: userLimpo });
             if (utilizador && utilizador.banned) {
@@ -282,9 +282,9 @@ io.on('connection', async (socket) => {
                 socket.disconnect(true);
                 return;
             }
-
+ 
             const horario = tempo || new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
-
+ 
             const msgPayload = {
                 _id: new (require('mongoose').Types.ObjectId)().toString(),
                 user,
@@ -294,19 +294,19 @@ io.on('connection', async (socket) => {
                 profilePic: profilePic || '',
                 role: utilizador ? utilizador.role : 'cliente'
             };
-
+ 
             // Envia ao destinatário (se online)
             const socketDestinatario = utilizadoresConectados[paraLimpo];
             if (socketDestinatario) {
                 io.to(socketDestinatario).emit('receberDM', msgPayload);
             }
             // Nota: não reenviamos ao remetente — o cliente já mostra localmente
-
+ 
         } catch (err) {
             console.error('Erro ao processar DM:', err);
         }
     });
-
+ 
     // ── INDICADOR DE ESCRITA EM DM ──
     socket.on('dmTyping', (dados) => {
         const { user, para } = dados;
@@ -317,7 +317,7 @@ io.on('connection', async (socket) => {
             io.to(socketDest).emit('dmTyping', { user, para });
         }
     });
-
+ 
     socket.on('dmStopTyping', (dados) => {
         const { user, para } = dados;
         if (!user || !para) return;
@@ -327,13 +327,13 @@ io.on('connection', async (socket) => {
             io.to(socketDest).emit('dmStopTyping', { user, para });
         }
     });
-
+ 
     // SISTEMA DE WIPE VIA EVENTO SOCKET PROTEGIDO (Garante funcionamento instantâneo e seguro)
     socket.on('solicitarWipeChat', async (dados) => {
         try {
             if (!dados || !dados.username) return;
             const quemPediu = dados.username.toLowerCase().trim();
-
+ 
             // Validação de segurança na Base de Dados
             const userDb = await User.findOne({ username: quemPediu });
             if (!userDb || (userDb.role !== 'admin' && userDb.role !== 'staff')) {
@@ -342,7 +342,7 @@ io.on('connection', async (socket) => {
                 socket.disconnect(true);
                 return;
             }
-
+ 
             const resultado = await Mensagem.deleteMany({});
             console.log(`[WIPE VIA SOCKET] Base de dados limpa por ${userDb.username}. ${resultado.deletedCount} mensagens apagadas.`);
             io.emit('chatLimpo');
@@ -351,9 +351,73 @@ io.on('connection', async (socket) => {
         }
     });
 });
-
+ 
+// --- SCHEMA MARKETPLACE ---
+const produtoSchema = new mongoose.Schema({
+    titulo:     { type: String, required: true },
+    descricao:  { type: String, default: '' },
+    preco:      { type: Number, required: true },
+    categoria:  { type: String, default: 'outros' },
+    condicao:   { type: String, default: 'Bom Estado' },
+    imagem:     { type: String, default: '' },
+    seller:     { type: String, required: true },
+    sold:       { type: Boolean, default: false },
+    comentarios:{ type: Array, default: [] },
+    criadoEm:   { type: Date, default: Date.now }
+});
+const Produto = mongoose.model('Produto', produtoSchema);
+ 
 // --- ROTAS DA API ---
-
+ 
+// MARKETPLACE — listar
+app.get('/api/marketplace', async (req, res) => {
+    try {
+        const produtos = await Produto.find().sort({ criadoEm: -1 });
+        res.json(produtos);
+    } catch (err) { res.status(500).json({ message: 'Erro ao carregar produtos.' }); }
+});
+ 
+// MARKETPLACE — criar
+app.post('/api/marketplace', async (req, res) => {
+    try {
+        const { titulo, descricao, preco, categoria, condicao, imagem, seller, sold, comentarios } = req.body;
+        if (!titulo || !seller || preco === undefined) return res.status(400).json({ message: 'Campos obrigatórios em falta.' });
+        const novo = new Produto({ titulo, descricao, preco, categoria, condicao, imagem, seller, sold: sold || false, comentarios: comentarios || [] });
+        await novo.save();
+        res.status(201).json(novo);
+    } catch (err) { res.status(500).json({ message: 'Erro ao criar produto.' }); }
+});
+ 
+// MARKETPLACE — atualizar (ex: marcar vendido)
+app.patch('/api/marketplace/:id', async (req, res) => {
+    try {
+        const atualizado = await Produto.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+        if (!atualizado) return res.status(404).json({ message: 'Produto não encontrado.' });
+        res.json(atualizado);
+    } catch (err) { res.status(500).json({ message: 'Erro ao atualizar produto.' }); }
+});
+ 
+// MARKETPLACE — apagar
+app.delete('/api/marketplace/:id', async (req, res) => {
+    try {
+        const apagado = await Produto.findByIdAndDelete(req.params.id);
+        if (!apagado) return res.status(404).json({ message: 'Produto não encontrado.' });
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ message: 'Erro ao apagar produto.' }); }
+});
+ 
+// MARKETPLACE — adicionar comentário
+app.post('/api/marketplace/:id/comments', async (req, res) => {
+    try {
+        const produto = await Produto.findById(req.params.id);
+        if (!produto) return res.status(404).json({ message: 'Produto não encontrado.' });
+        produto.comentarios = produto.comentarios || [];
+        produto.comentarios.push({ ...req.body, criadoEm: new Date().toISOString() });
+        await produto.save();
+        res.json(produto);
+    } catch (err) { res.status(500).json({ message: 'Erro ao comentar.' }); }
+});
+ 
 app.post('/api/register', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -370,7 +434,7 @@ app.post('/api/register', async (req, res) => {
         res.status(201).json({ success: true });
     } catch (err) { res.status(500).json({ message: 'Erro no registo.' }); }
 });
-
+ 
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -380,33 +444,33 @@ app.post('/api/login', async (req, res) => {
         if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
         
         if (user.banned) return res.status(403).json({ message: 'Esta conta foi banida permanentemente da plataforma.' });
-
+ 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ message: 'Credenciais inválidas.' });
         
         res.json({ success: true, username: user.username, profilePic: user.profilePic, bio: user.bio, role: user.role });
     } catch (err) { res.status(500).json({ message: 'Erro na autenticação.' }); }
 });
-
+ 
 app.put('/api/users/profile', async (req, res) => {
     try {
         const { username, profilePic, bio } = req.body;
         if (!username) return res.status(400).json({ success: false, message: 'Identificação do utilizador em falta.' });
-
+ 
         const usernameLimpo = username.toLowerCase().trim();
         const dadosAtualizar = {};
         
         if (profilePic !== undefined) dadosAtualizar.profilePic = profilePic;
         if (bio !== undefined) dadosAtualizar.bio = bio;
-
+ 
         const utilizadorAtualizado = await User.findOneAndUpdate(
             { username: usernameLimpo },
             { $set: dadosAtualizar },
             { new: true }
         );
-
+ 
         if (!utilizadorAtualizado) return res.status(404).json({ success: false, message: 'Utilizador não encontrado.' });
-
+ 
         res.json({
             success: true,
             message: 'Perfil guardado com sucesso!',
@@ -422,7 +486,7 @@ app.put('/api/users/profile', async (req, res) => {
         res.status(500).json({ success: false, message: 'Erro ao guardar alterações de perfil.' });
     }
 });
-
+ 
 app.put('/api/users/role', async (req, res) => {
     try {
         const { username, novoRole } = req.body;
@@ -430,28 +494,28 @@ app.put('/api/users/role', async (req, res) => {
         
         if (targetUser === 'admin') return res.status(400).json({ message: 'Não podes alterar o cargo do administrador principal.' });
         if (!['cliente', 'staff'].includes(novoRole)) return res.status(400).json({ message: 'Cargo inválido fornecido.' });
-
+ 
         const atualizado = await User.findOneAndUpdate({ username: targetUser }, { role: novoRole }, { new: true });
         if (!atualizado) return res.status(404).json({ message: 'Utilizador não encontrado.' });
-
+ 
         res.json({ success: true, message: `Cargo de ${atualizado.username} alterado com sucesso para ${novoRole}!` });
     } catch (err) { res.status(500).json({ message: 'Erro ao processar alteração de cargo.' }); }
 });
-
+ 
 app.put('/api/users/ban', async (req, res) => {
     try {
         const { username } = req.body;
         if (!username) return res.status(400).json({ message: 'Nome de utilizador em falta.' });
         
         const targetUser = username.toLowerCase().trim();
-
+ 
         if (targetUser === 'admin') return res.status(400).json({ message: 'Operação proibida. O administrador principal é imune.' });
-
+ 
         const utilizadorApagado = await User.findOneAndDelete({ username: targetUser });
         if (!utilizadorApagado) return res.status(404).json({ message: 'Utilizador não encontrado no sistema.' });
-
+ 
         io.emit('utilizadorBanidoKick', targetUser);
-
+ 
         const socketIdInfrator = utilizadoresConectados[targetUser];
         if (socketIdInfrator) {
             const socketAlvo = io.sockets.sockets.get(socketIdInfrator);
@@ -463,14 +527,14 @@ app.put('/api/users/ban', async (req, res) => {
             delete utilizadoresConectados[targetUser];
             io.emit('listaOnline', Object.keys(utilizadoresConectados));
         }
-
+ 
         return res.json({ success: true, message: `O utilizador ${utilizadorApagado.username} foi totalmente removido da base de dados.` });
     } catch (err) { 
         console.error('Erro na execução da rota de ban:', err);
         return res.status(500).json({ message: 'Erro ao processar banimento.' }); 
     }
 });
-
+ 
 // FIX DE ROTAS HTTP: A rota do Wipe foi movida para cima para evitar conflitos com o parâmetro dinâmico ":id"
 app.delete('/api/chat/wipe', async (req, res) => {
     try {
@@ -488,7 +552,7 @@ app.delete('/api/chat/wipe', async (req, res) => {
         return res.status(500).json({ success: false, message: 'Erro ao limpar a base de dados do chat.' });
     }
 });
-
+ 
 app.delete('/api/chat/:id', async (req, res) => {
     try {
         const msgApagada = await Mensagem.findByIdAndDelete(req.params.id);
@@ -500,7 +564,7 @@ app.delete('/api/chat/:id', async (req, res) => {
         res.status(500).json({ success: false, message: 'Erro ao apagar mensagem individual.' });
     }
 });
-
+ 
 app.get('/api/marcacoes', async (req, res) => {
     try {
         const lista = await Marcacao.find();
@@ -509,7 +573,7 @@ app.get('/api/marcacoes', async (req, res) => {
         res.status(500).json({ message: 'Erro ao carregar marcações.' });
     }
 });
-
+ 
 app.delete('/api/marcacoes/:id', async (req, res) => {
     try {
         await Marcacao.findByIdAndDelete(req.params.id);
@@ -518,7 +582,7 @@ app.delete('/api/marcacoes/:id', async (req, res) => {
         res.status(500).json({ message: 'Erro ao eliminar marcação.' });
     }
 });
-
+ 
 app.get('/api/users', async (req, res) => {
     try {
         const listaUsers = await User.find();
@@ -527,8 +591,9 @@ app.get('/api/users', async (req, res) => {
         res.status(500).json({ message: 'Erro ao carregar utilizadores.' });
     }
 });
-
+ 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Servidor ativo na porta ${PORT}`);
 });
+ 
